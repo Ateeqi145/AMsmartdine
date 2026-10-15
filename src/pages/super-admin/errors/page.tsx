@@ -1,14 +1,29 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { Link } from "react-router-dom";
 import { api } from "@/convex/_generated/api.js";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Card, CardContent } from "@/components/ui/card.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
+import { Input } from "@/components/ui/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.tsx";
 import { toast } from "sonner";
-import { AlertTriangle, CheckCircle2, Eye } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Eye,
+  ExternalLink,
+  Search,
+} from "lucide-react";
+import { ERROR_GUIDES, getErrorGuide } from "@/lib/error-catalog";
 
 type ErrorStatus = "NEW" | "REVIEWED" | "RESOLVED";
 
@@ -20,11 +35,14 @@ const STATUS_COLOR: Record<ErrorStatus, string> = {
 
 export default function SuperAdminErrors() {
   const [statusFilter, setStatusFilter] = useState<ErrorStatus | "ALL">("ALL");
+  const [search, setSearch] = useState("");
   const updateStatus = useMutation(api.admin.updateErrorStatus);
 
   const errors = useQuery(
     api.admin.listErrors,
-    statusFilter === "ALL" ? { limit: 100 } : { status: statusFilter, limit: 100 },
+    statusFilter === "ALL"
+      ? { limit: 100 }
+      : { status: statusFilter, limit: 100 },
   );
 
   const handleUpdate = async (id: string, status: ErrorStatus) => {
@@ -36,14 +54,31 @@ export default function SuperAdminErrors() {
     }
   };
 
+  const normalizedSearch = search.trim().toLowerCase();
+  const visibleGuides = ERROR_GUIDES.filter(
+    (guide) =>
+      !normalizedSearch ||
+      `${guide.code} ${guide.name} ${guide.feature} ${guide.cause} ${guide.action}`
+        .toLowerCase()
+        .includes(normalizedSearch),
+  );
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Error Logs</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Structured errors with context for debugging</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            Errors & Diagnostics
+          </h1>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            Recorded browser failures plus known app errors, causes, and
+            recovery actions.
+          </p>
         </div>
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+        <Select
+          value={statusFilter}
+          onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}
+        >
           <SelectTrigger className="w-36">
             <SelectValue />
           </SelectTrigger>
@@ -56,90 +91,236 @@ export default function SuperAdminErrors() {
         </Select>
       </div>
 
-      {errors === undefined ? (
-        <div className="space-y-3">
-          {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold">
+            Known error causes and actions
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            These diagnoses are based on current app behavior. A matching cause
+            is a lead, not proof; confirm it against the request ID and
+            deployment logs.
+          </p>
         </div>
-      ) : errors.length === 0 ? (
-        <Card>
-          <CardContent className="py-16 text-center space-y-2">
-            <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
-            <p className="font-medium">No errors{statusFilter !== "ALL" ? ` with status "${statusFilter}"` : ""}</p>
-            <p className="text-sm text-muted-foreground">All systems running cleanly</p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {errors.map((e) => (
-            <Card key={e._id} className={e.status === "NEW" ? "border-destructive/30" : ""}>
-              <CardContent className="py-4">
-                <div className="flex items-start gap-4">
-                  <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${e.status === "NEW" ? "text-destructive" : "text-muted-foreground"}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2 flex-wrap">
-                      <p className="font-medium text-sm">{e.message}</p>
-                      <Badge variant={STATUS_COLOR[e.status] as "destructive" | "secondary" | "default"} className="text-xs flex-shrink-0">
-                        {e.status}
-                      </Badge>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search error name, feature, cause, or action"
+            aria-label="Search error diagnostics"
+            className="pl-9"
+          />
+        </div>
+        {visibleGuides.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              No known error guide matches this search. Check the latest Vercel
+              and Convex logs for an unclassified failure.
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {visibleGuides.map((guide) => (
+              <Card key={guide.code}>
+                <CardContent className="space-y-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">{guide.name}</p>
+                      <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                        {guide.code}
+                      </p>
                     </div>
-                    {/* Context tags */}
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {e.module && (
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
-                          Module: {e.module}
-                        </span>
-                      )}
-                      {e.feature && (
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
-                          Feature: {e.feature}
-                        </span>
-                      )}
-                      {e.userRole && (
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
-                          Role: {e.userRole}
-                        </span>
-                      )}
-                      {e.environment && (
-                        <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
-                          Env: {e.environment}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-3 mt-1.5 text-xs text-muted-foreground items-center">
-                      {e.requestId && <span className="font-mono">{e.requestId}</span>}
-                      <span>{new Date(e.timestamp).toLocaleString()}</span>
-                    </div>
-                    {e.stack && (
-                      <details className="mt-2">
-                        <summary className="text-xs text-muted-foreground cursor-pointer flex items-center gap-1 w-fit hover:text-foreground">
-                          <Eye className="w-3 h-3" />
-                          Stack trace
-                        </summary>
-                        <pre className="text-xs font-mono bg-muted/60 rounded-lg p-3 mt-1.5 overflow-x-auto whitespace-pre-wrap text-muted-foreground">{e.stack}</pre>
-                      </details>
-                    )}
+                    <Badge variant="secondary">{guide.feature}</Badge>
                   </div>
-                </div>
-                {/* Actions */}
-                {e.status !== "RESOLVED" && (
-                  <div className="flex gap-2 mt-3 ml-8">
-                    {e.status === "NEW" && (
-                      <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" onClick={() => handleUpdate(e._id, "REVIEWED")}>
-                        <Eye className="w-3 h-3" />
-                        Mark Reviewed
-                      </Button>
-                    )}
-                    <Button size="sm" variant="ghost" className="h-7 text-xs gap-1 text-green-600 hover:text-green-700" onClick={() => handleUpdate(e._id, "RESOLVED")}>
-                      <CheckCircle2 className="w-3 h-3" />
-                      Resolve
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Likely cause
+                    </p>
+                    <p className="mt-1 text-sm">{guide.cause}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Action
+                    </p>
+                    <p className="mt-1 text-sm">{guide.action}</p>
+                  </div>
+                  {guide.href && (
+                    <Button
+                      asChild
+                      size="sm"
+                      variant="outline"
+                      className="gap-2"
+                    >
+                      <Link to={guide.href}>
+                        Open relevant page
+                        <ExternalLink className="size-3.5" />
+                      </Link>
                     </Button>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold">Recorded runtime errors</h2>
+          <p className="text-sm text-muted-foreground">
+            Uncaught browser errors from signed-in staff accounts are reported
+            with a safe error code and route. User input, raw error messages,
+            and stack traces are not sent by this reporter.
+          </p>
         </div>
-      )}
+        {errors === undefined ? (
+          <div className="space-y-3">
+            {[...Array(4)].map((_, i) => (
+              <Skeleton key={i} className="h-24 w-full" />
+            ))}
+          </div>
+        ) : errors.length === 0 ? (
+          <Card>
+            <CardContent className="py-16 text-center space-y-2">
+              <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
+              <p className="font-medium">
+                No errors
+                {statusFilter !== "ALL" ? ` with status "${statusFilter}"` : ""}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                No runtime errors have been recorded for this filter.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {errors.map((e) => (
+              <Card
+                key={e._id}
+                className={e.status === "NEW" ? "border-destructive/30" : ""}
+              >
+                <CardContent className="py-4">
+                  <div className="flex items-start gap-4">
+                    <AlertTriangle
+                      className={`w-4 h-4 mt-0.5 flex-shrink-0 ${e.status === "NEW" ? "text-destructive" : "text-muted-foreground"}`}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2 flex-wrap">
+                        <div>
+                          <p className="font-medium text-sm">
+                            {e.errorCode
+                              ? getErrorGuide(e.errorCode, e.message).name
+                              : e.message}
+                          </p>
+                          {e.errorCode && (
+                            <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                              {e.errorCode}
+                            </p>
+                          )}
+                        </div>
+                        <Badge
+                          variant={
+                            STATUS_COLOR[e.status] as
+                              "destructive" | "secondary" | "default"
+                          }
+                          className="text-xs flex-shrink-0"
+                        >
+                          {e.status}
+                        </Badge>
+                      </div>
+                      {/* Context tags */}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {e.module && (
+                          <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
+                            Module: {e.module}
+                          </span>
+                        )}
+                        {e.feature && (
+                          <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
+                            Feature: {e.feature}
+                          </span>
+                        )}
+                        {e.userRole && (
+                          <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
+                            Role: {e.userRole}
+                          </span>
+                        )}
+                        {e.environment && (
+                          <span className="text-xs bg-muted px-2 py-0.5 rounded font-medium">
+                            Env: {e.environment}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-3 rounded-lg bg-muted/40 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Likely cause
+                        </p>
+                        <p className="mt-1 text-sm">
+                          {e.cause ??
+                            getErrorGuide(e.errorCode, e.message).cause}
+                        </p>
+                        <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Recommended action
+                        </p>
+                        <p className="mt-1 text-sm">
+                          {e.action ??
+                            getErrorGuide(e.errorCode, e.message).action}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-1.5 text-xs text-muted-foreground items-center">
+                        {e.requestId && (
+                          <span className="font-mono">{e.requestId}</span>
+                        )}
+                        <span>{new Date(e.timestamp).toLocaleString()}</span>
+                        {(e.occurrences ?? 1) > 1 && (
+                          <span>Seen {e.occurrences} times</span>
+                        )}
+                      </div>
+                      {e.stack && (
+                        <details className="mt-2">
+                          <summary className="text-xs text-muted-foreground cursor-pointer flex items-center gap-1 w-fit hover:text-foreground">
+                            <Eye className="w-3 h-3" />
+                            Stack trace
+                          </summary>
+                          <pre className="text-xs font-mono bg-muted/60 rounded-lg p-3 mt-1.5 overflow-x-auto whitespace-pre-wrap text-muted-foreground">
+                            {e.stack}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+                  {/* Actions */}
+                  {e.status !== "RESOLVED" && (
+                    <div className="flex gap-2 mt-3 ml-8">
+                      {e.status === "NEW" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs gap-1"
+                          onClick={() => handleUpdate(e._id, "REVIEWED")}
+                        >
+                          <Eye className="w-3 h-3" />
+                          Mark Reviewed
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 text-xs gap-1 text-green-600 hover:text-green-700"
+                        onClick={() => handleUpdate(e._id, "RESOLVED")}
+                      >
+                        <CheckCircle2 className="w-3 h-3" />
+                        Resolve
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

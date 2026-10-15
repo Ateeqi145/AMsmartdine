@@ -42,12 +42,20 @@ export const listErrors = query({
   },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    const errors = args.status
-      ? await ctx.db.query("errorLogs").withIndex("by_status", (q) => q.eq("status", args.status!)).collect()
-      : await ctx.db.query("errorLogs").collect();
-    return errors
-      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
-      .slice(0, Math.max(0, args.limit ?? 100));
+    const limit = Math.min(200, Math.max(1, Math.floor(args.limit ?? 100)));
+    return args.status
+      ? await ctx.db
+          .query("errorLogs")
+          .withIndex("by_status_and_timestamp", (q) =>
+            q.eq("status", args.status!),
+          )
+          .order("desc")
+          .take(limit)
+      : await ctx.db
+          .query("errorLogs")
+          .withIndex("by_timestamp")
+          .order("desc")
+          .take(limit);
   },
 });
 

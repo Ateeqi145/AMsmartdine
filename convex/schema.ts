@@ -302,21 +302,36 @@ export default defineSchema({
   // ── Error logs ────────────────────────────────────────────────────
   errorLogs: defineTable({
     restaurantId: v.optional(v.id("restaurants")),
+    reporterId: v.optional(v.id("users")),
     userRole: v.optional(v.string()),
     feature: v.optional(v.string()),
     module: v.optional(v.string()),
+    errorCode: v.optional(v.string()),
     message: v.string(),
+    cause: v.optional(v.string()),
+    action: v.optional(v.string()),
+    fingerprint: v.optional(v.string()),
+    occurrences: v.optional(v.number()),
+    lastSeenAt: v.optional(v.string()),
     stack: v.optional(v.string()),
     requestId: v.optional(v.string()),
     timestamp: v.string(),
     environment: v.optional(v.string()),
     appVersion: v.optional(v.string()),
-    status: v.union(v.literal("NEW"), v.literal("REVIEWED"), v.literal("RESOLVED")),
+    status: v.union(
+      v.literal("NEW"),
+      v.literal("REVIEWED"),
+      v.literal("RESOLVED"),
+    ),
     resolvedAt: v.optional(v.string()),
     resolvedBy: v.optional(v.id("users")),
   })
     .index("by_restaurant", ["restaurantId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_timestamp", ["timestamp"])
+    .index("by_status_and_timestamp", ["status", "timestamp"])
+    .index("by_reporter_fingerprint", ["reporterId", "fingerprint"])
+    .index("by_reporter_last_seen", ["reporterId", "lastSeenAt"]),
 
   // ── Support tickets ───────────────────────────────────────────────
   supportTickets: defineTable({
