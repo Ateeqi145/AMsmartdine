@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireSuperAdmin } from "./lib/auth";
+import { assertRoleSlotAvailable } from "./lib/roleLimits";
 
 export const platformStats = query({
   args: {},
@@ -8,12 +9,19 @@ export const platformStats = query({
     await requireSuperAdmin(ctx);
     const [restaurants, errors, tickets] = await Promise.all([
       ctx.db.query("restaurants").collect(),
-      ctx.db.query("errorLogs").withIndex("by_status", (q) => q.eq("status", "NEW")).collect(),
-      ctx.db.query("supportTickets").withIndex("by_status", (q) => q.eq("status", "OPEN")).collect(),
+      ctx.db
+        .query("errorLogs")
+        .withIndex("by_status", (q) => q.eq("status", "NEW"))
+        .collect(),
+      ctx.db
+        .query("supportTickets")
+        .withIndex("by_status", (q) => q.eq("status", "OPEN"))
+        .collect(),
     ]);
     return {
       totalRestaurants: restaurants.length,
-      activeRestaurants: restaurants.filter((restaurant) => restaurant.isActive).length,
+      activeRestaurants: restaurants.filter((restaurant) => restaurant.isActive)
+        .length,
       newErrorCount: errors.length,
       openTicketCount: tickets.length,
     };
@@ -29,7 +37,9 @@ export const list = query({
     await requireSuperAdmin(ctx);
     const logs = await ctx.db.query("auditLogs").collect();
     return logs
-      .filter((log) => !args.restaurantId || log.restaurantId === args.restaurantId)
+      .filter(
+        (log) => !args.restaurantId || log.restaurantId === args.restaurantId,
+      )
       .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
       .slice(0, Math.max(0, args.limit ?? 100));
   },
@@ -37,7 +47,9 @@ export const list = query({
 
 export const listErrors = query({
   args: {
-    status: v.optional(v.union(v.literal("NEW"), v.literal("REVIEWED"), v.literal("RESOLVED"))),
+    status: v.optional(
+      v.union(v.literal("NEW"), v.literal("REVIEWED"), v.literal("RESOLVED")),
+    ),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -62,13 +74,18 @@ export const listErrors = query({
 export const updateErrorStatus = mutation({
   args: {
     errorId: v.id("errorLogs"),
-    status: v.union(v.literal("NEW"), v.literal("REVIEWED"), v.literal("RESOLVED")),
+    status: v.union(
+      v.literal("NEW"),
+      v.literal("REVIEWED"),
+      v.literal("RESOLVED"),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await requireSuperAdmin(ctx);
-    await ctx.db.patch(args.errorId, {
+    await ctx.db.patch("errorLogs", args.errorId, {
       status: args.status,
-      resolvedAt: args.status === "RESOLVED" ? new Date().toISOString() : undefined,
+      resolvedAt:
+        args.status === "RESOLVED" ? new Date().toISOString() : undefined,
       resolvedBy: args.status === "RESOLVED" ? user._id : undefined,
     });
   },
@@ -98,7 +115,8 @@ export const assignUserRole = mutation({
     if (args.role !== "SUPER_ADMIN" && !args.restaurantId) {
       throw new Error("A restaurant is required for this role");
     }
-    await ctx.db.patch(args.userId, {
+    await assertRoleSlotAvailable(ctx, args);
+    await ctx.db.patch("users", args.userId, {
       role: args.role,
       restaurantId: args.role === "SUPER_ADMIN" ? undefined : args.restaurantId,
       ...(args.isActive === undefined ? {} : { isActive: args.isActive }),
@@ -110,24 +128,52 @@ export const setUserActive = mutation({
   args: { userId: v.id("users"), isActive: v.boolean() },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    await ctx.db.patch(args.userId, { isActive: args.isActive });
+    const target = await ctx.db.get("users", args.userId);
+    if (args.isActive && target?.role) {
+      await assertRoleSlotAvailable(ctx, {
+        userId: args.userId,
+        role: target.role,
+        restaurantId: target.restaurantId,
+      });
+    }
+    if (target?.role === "SUPER_ADMIN" && !args.isActive) {
+      const activeAdmins = await ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "SUPER_ADMIN"))
+        .take(1000);
+      if (
+        !activeAdmins.some(
+          (user) => user._id !== args.userId && user.isActive !== false,
+        )
+      ) {
+        throw new Error(
+          "Assign another Super Admin before deactivating this account",
+        );
+      }
+    }
+    await ctx.db.patch("users", args.userId, { isActive: args.isActive });
   },
 });
 
 export const listSupportTickets = query({
   args: {
-    status: v.optional(v.union(
-      v.literal("OPEN"),
-      v.literal("IN_PROGRESS"),
-      v.literal("RESOLVED"),
-      v.literal("CLOSED"),
-    )),
+    status: v.optional(
+      v.union(
+        v.literal("OPEN"),
+        v.literal("IN_PROGRESS"),
+        v.literal("RESOLVED"),
+        v.literal("CLOSED"),
+      ),
+    ),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
     const tickets = args.status
-      ? await ctx.db.query("supportTickets").withIndex("by_status", (q) => q.eq("status", args.status!)).collect()
+      ? await ctx.db
+          .query("supportTickets")
+          .withIndex("by_status", (q) => q.eq("status", args.status!))
+          .collect()
       : await ctx.db.query("supportTickets").collect();
     return tickets
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -148,18 +194,22 @@ export const updateSupportTicket = mutation({
   },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
-    await ctx.db.patch(args.ticketId, {
+    await ctx.db.patch("supportTickets", args.ticketId, {
       status: args.status,
       notes: args.notes,
       updatedAt: new Date().toISOString(),
-      resolvedAt: args.status === "RESOLVED" ? new Date().toISOString() : undefined,
+      resolvedAt:
+        args.status === "RESOLVED" ? new Date().toISOString() : undefined,
     });
   },
 });
 
 export const platformRevenue = query({
   args: { days: v.number() },
-  handler: async (ctx, args): Promise<Array<{ date: string; revenue: number }>> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Array<{ date: string; revenue: number }>> => {
     await requireSuperAdmin(ctx);
 
     const since = new Date();
@@ -167,7 +217,10 @@ export const platformRevenue = query({
 
     const payments = await ctx.db.query("payments").collect();
     const paid = payments.filter(
-      (p) => p.status === "PAID" && p.completedAt && new Date(p.completedAt) >= since
+      (p) =>
+        p.status === "PAID" &&
+        p.completedAt &&
+        new Date(p.completedAt) >= since,
     );
 
     const byDay: Record<string, number> = {};
@@ -191,7 +244,7 @@ export const restaurantGrowth = query({
   args: { months: v.number() },
   handler: async (
     ctx,
-    args
+    args,
   ): Promise<Array<{ month: string; count: number }>> => {
     await requireSuperAdmin(ctx);
 

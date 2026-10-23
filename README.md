@@ -11,6 +11,23 @@ SmartDine multi-restaurant app built with React, TypeScript, Vite, and Convex.
 - `convex/` - schema, backend modules, and generated Convex bindings
 - `public/` - static assets
 
+## Restaurant access and table sessions
+
+Restaurant workspaces use `/restaurant/...` URLs. Managers can manage menu items,
+tables, settings, and reports; Staff can handle orders, waiter requests, and
+payment confirmations but cannot edit the menu or tables or view revenue reports.
+The system allows one active Super Admin and one active Manager per restaurant;
+multiple Staff accounts are supported.
+
+Customer QR sessions remain available across page reloads and stay open until
+the bill is fully paid and every non-cancelled order is delivered. The customer
+then sees the bill and feedback view, with an option to start a new visit.
+Customer actions appear as realtime notifications in the restaurant workspace;
+new orders also play a sound after staff interact with the page. Managers can
+upload JPEG, PNG, and WebP menu photos (up to 5 MB) from the Menu page.
+Managers can load a small sample menu for testing when the restaurant menu is
+empty; the fixture does not overwrite existing categories or items.
+
 ## Run locally
 
 Install dependencies with `npm install`, set up the Convex Auth signing keys on the development deployment, run `npx convex dev`, then run `npm run dev` in a second terminal.

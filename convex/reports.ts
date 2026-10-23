@@ -1,11 +1,14 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { requireRestaurantAccess } from "./lib/auth";
+import { requireRestaurantManager } from "./lib/auth";
 
 export const dailyRevenue = query({
   args: { restaurantId: v.id("restaurants"), days: v.number() },
-  handler: async (ctx, args): Promise<Array<{ date: string; revenue: number }>> => {
-    await requireRestaurantAccess(ctx, args.restaurantId);
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Array<{ date: string; revenue: number }>> => {
+    await requireRestaurantManager(ctx, args.restaurantId);
 
     const since = new Date();
     since.setDate(since.getDate() - args.days);
@@ -14,12 +17,15 @@ export const dailyRevenue = query({
     const payments = await ctx.db
       .query("payments")
       .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId)
+        q.eq("restaurantId", args.restaurantId),
       )
       .collect();
 
     const paid = payments.filter(
-      (p) => p.status === "PAID" && p.completedAt && new Date(p.completedAt) >= since
+      (p) =>
+        p.status === "PAID" &&
+        p.completedAt &&
+        new Date(p.completedAt) >= since,
     );
 
     const byDay: Record<string, number> = {};
@@ -44,14 +50,14 @@ export const topMenuItems = query({
   args: { restaurantId: v.id("restaurants"), limit: v.number() },
   handler: async (
     ctx,
-    args
+    args,
   ): Promise<Array<{ name: string; count: number; revenue: number }>> => {
-    await requireRestaurantAccess(ctx, args.restaurantId);
+    await requireRestaurantManager(ctx, args.restaurantId);
 
     const orders = await ctx.db
       .query("orders")
       .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId)
+        q.eq("restaurantId", args.restaurantId),
       )
       .collect();
 
@@ -78,26 +84,26 @@ export const sessionStats = query({
   args: { restaurantId: v.id("restaurants") },
   handler: async (
     ctx,
-    args
+    args,
   ): Promise<{
     avgDurationMinutes: number;
     avgOrderValue: number;
     totalOrdersToday: number;
     totalRevenueToday: number;
   }> => {
-    await requireRestaurantAccess(ctx, args.restaurantId);
+    await requireRestaurantManager(ctx, args.restaurantId);
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
     const allSessions = await ctx.db
       .query("sessions")
       .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId)
+        q.eq("restaurantId", args.restaurantId),
       )
       .collect();
 
     const closedSessions = allSessions.filter(
-      (s) => s.status === "CLOSED" && s.closedAt
+      (s) => s.status === "CLOSED" && s.closedAt,
     );
 
     const avgDuration =
@@ -114,19 +120,17 @@ export const sessionStats = query({
     const todayOrders = await ctx.db
       .query("orders")
       .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId)
+        q.eq("restaurantId", args.restaurantId),
       )
       .collect();
 
     const todayFiltered = todayOrders.filter(
-      (o) =>
-        o.placedAt.slice(0, 10) === todayStr && o.status !== "CANCELLED"
+      (o) => o.placedAt.slice(0, 10) === todayStr && o.status !== "CANCELLED",
     );
 
     const totalToday = todayFiltered.length;
     const revenueToday = todayFiltered.reduce((s, o) => s + o.total, 0);
-    const avgOrderValue =
-      totalToday > 0 ? revenueToday / totalToday : 0;
+    const avgOrderValue = totalToday > 0 ? revenueToday / totalToday : 0;
 
     return {
       avgDurationMinutes: Math.round(avgDuration),

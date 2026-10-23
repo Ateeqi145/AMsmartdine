@@ -141,7 +141,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "Vercel did not rewrite the SPA route to index.html, or the deployment does not include vercel.json.",
     action:
       "Include vercel.json in the Vercel deployment and redeploy. Test the direct /table/<token> URL before printing a QR.",
-    href: "/manager/tables",
+    href: "/restaurant/tables",
   },
   {
     code: "QR_TOKEN_INVALID",
@@ -151,7 +151,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "No table has the token encoded in this QR. The QR may be stale after regeneration or point to another environment.",
     action:
       "Open Tables & QR Codes in the correct restaurant and download its current QR. Check the URL hostname matches this deployment.",
-    href: "/manager/tables",
+    href: "/restaurant/tables",
   },
   {
     code: "TABLE_INACTIVE",
@@ -160,7 +160,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause:
       "The table exists but is switched off, so a customer session cannot start.",
     action: "Activate the table in Tables & QR Codes.",
-    href: "/manager/tables",
+    href: "/restaurant/tables",
   },
   {
     code: "RESTAURANT_INACTIVE",
@@ -179,7 +179,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The table session is closed or in billing state, so adding items or placing an order is disabled.",
     action:
       "Refresh the QR page. For a closed session, ask staff to start a new visit; for billing, settle the current bill first.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "MENU_EMPTY",
@@ -188,7 +188,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause:
       "There are no active categories with available menu items. Unavailable items are excluded from the QR menu.",
     action: "Add an active category and available items with prices in Menu.",
-    href: "/manager/menu",
+    href: "/restaurant/menu",
   },
   {
     code: "CART_EMPTY",
@@ -196,7 +196,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     feature: "Orders",
     cause: "No cart items were found for the current table session/customer.",
     action: "Add at least one available menu item, then send the order.",
-    href: "/manager/menu",
+    href: "/restaurant/menu",
   },
   {
     code: "MENU_ITEM_UNAVAILABLE",
@@ -206,7 +206,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "An item was removed, marked unavailable, or belongs to a different restaurant before the order was placed.",
     action:
       "Refresh the menu and remove the unavailable item. Staff can check its availability in Menu.",
-    href: "/manager/menu",
+    href: "/restaurant/menu",
   },
   {
     code: "DUPLICATE_TABLE_NUMBER",
@@ -214,7 +214,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     feature: "Table setup",
     cause: "Table numbers must be unique within a restaurant.",
     action: "Choose another table number or edit the existing table.",
-    href: "/manager/tables",
+    href: "/restaurant/tables",
   },
   {
     code: "TABLE_HAS_ACTIVE_SESSION",
@@ -223,7 +223,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause: "At least one active session is still linked to this table.",
     action:
       "Settle and close the session from Billing before deleting the table.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "CATEGORY_NOT_EMPTY",
@@ -233,7 +233,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The backend prevents deleting a category while menu items still reference it.",
     action:
       "Move or delete the category's items first, then delete the category.",
-    href: "/manager/menu",
+    href: "/restaurant/menu",
   },
   {
     code: "WAITER_FEATURE_DISABLED",
@@ -279,7 +279,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The requested payment is greater than the current outstanding bill, possibly because another payment completed meanwhile.",
     action:
       "Refresh the bill summary and retry payment for the updated remaining amount.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "CASH_EXCEEDS_BALANCE",
@@ -288,7 +288,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause: "The amount entered by staff is greater than the remaining balance.",
     action:
       "Refresh the bill and record only the amount actually collected, up to the remaining balance.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "BILL_HAS_OUTSTANDING_BALANCE",
@@ -298,7 +298,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The session total is greater than the recorded paid amount; closing is blocked to prevent losing an unpaid table balance.",
     action:
       "Record the remaining cash or verify the online payment, then close the bill.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "FEEDBACK_DISABLED",
@@ -317,7 +317,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The bill has not been fully paid, and the backend only accepts feedback after payment.",
     action:
       "Complete the bill payment; the feedback form becomes available automatically.",
-    href: "/manager/billing",
+    href: "/restaurant/billing",
   },
   {
     code: "FEEDBACK_ALREADY_SUBMITTED",

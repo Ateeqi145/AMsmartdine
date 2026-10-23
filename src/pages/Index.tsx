@@ -5,7 +5,16 @@ import { SignInButton } from "@/components/ui/signin.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Navigate } from "react-router-dom";
 import { motion } from "motion/react";
-import { UtensilsCrossed, ChevronRight, Shield, Store, Users, BarChart3, QrCode, Zap } from "lucide-react";
+import {
+  UtensilsCrossed,
+  ChevronRight,
+  Shield,
+  Store,
+  Users,
+  BarChart3,
+  QrCode,
+  Zap,
+} from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
 
 function RoleRouter() {
@@ -29,7 +38,8 @@ function RoleRouter() {
           </div>
           <h2 className="text-2xl font-bold">Account Pending</h2>
           <p className="text-muted-foreground max-w-sm">
-            Your account is awaiting role assignment. Please contact the SmartDine administrator.
+            Your account is awaiting role assignment. Please contact the
+            SmartDine administrator.
           </p>
         </div>
       </div>
@@ -41,19 +51,39 @@ function RoleRouter() {
   }
 
   if (user.role === "RESTAURANT_MANAGER" || user.role === "RESTAURANT_STAFF") {
-    return <Navigate to="/manager/dashboard" replace />;
+    return <Navigate to="/restaurant/dashboard" replace />;
   }
 
   return null;
 }
 
 const features = [
-  { icon: Store, title: "Multi-Restaurant", desc: "One platform, unlimited restaurants" },
-  { icon: QrCode, title: "QR Ordering", desc: "Permanent QR per table, shared sessions" },
-  { icon: Users, title: "Role-Based", desc: "Super Admin, Manager, Staff, Customer" },
-  { icon: BarChart3, title: "Analytics", desc: "Per-restaurant insights and reporting" },
+  {
+    icon: Store,
+    title: "Multi-Restaurant",
+    desc: "One platform, unlimited restaurants",
+  },
+  {
+    icon: QrCode,
+    title: "QR Ordering",
+    desc: "Permanent QR per table, shared sessions",
+  },
+  {
+    icon: Users,
+    title: "Role-Based",
+    desc: "Super Admin, Manager, Staff, Customer",
+  },
+  {
+    icon: BarChart3,
+    title: "Analytics",
+    desc: "Per-restaurant insights and reporting",
+  },
   { icon: Zap, title: "Realtime", desc: "Live shared cart and order updates" },
-  { icon: Shield, title: "Secure", desc: "Server-side authorization at every layer" },
+  {
+    icon: Shield,
+    title: "Secure",
+    desc: "Server-side authorization at every layer",
+  },
 ];
 
 export default function Index() {
@@ -77,7 +107,9 @@ export default function Index() {
               <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                 <UtensilsCrossed className="w-4 h-4 text-primary-foreground" />
               </div>
-              <span className="font-bold text-lg tracking-tight">SmartDine</span>
+              <span className="font-bold text-lg tracking-tight">
+                SmartDine
+              </span>
             </div>
             <SignInButton />
           </nav>
@@ -99,8 +131,9 @@ export default function Index() {
                 <span className="text-primary">Every Restaurant</span>
               </h1>
               <p className="text-xl text-muted-foreground text-balance max-w-2xl mx-auto">
-                SmartDine powers multi-restaurant operations with QR ordering, shared carts,
-                realtime updates, and a central Super Admin to manage it all.
+                SmartDine powers multi-restaurant operations with QR ordering,
+                shared carts, realtime updates, and a central Super Admin to
+                manage it all.
               </p>
               <div className="flex items-center justify-center gap-4 pt-2">
                 <SignInButton />

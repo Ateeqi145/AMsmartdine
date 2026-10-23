@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { requireRestaurantAccess, requireSuperAdmin } from "./lib/auth";
+import { assertRoleSlotAvailable } from "./lib/roleLimits";
 
 /** Get current user with role info */
 export const getCurrentUser = query({
@@ -36,9 +37,10 @@ export const assignRole = mutation({
   },
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
+    await assertRoleSlotAvailable(ctx, args);
     await ctx.db.patch("users", args.userId, {
       role: args.role,
-      restaurantId: args.restaurantId,
+      restaurantId: args.role === "SUPER_ADMIN" ? undefined : args.restaurantId,
     });
   },
 });
@@ -50,7 +52,9 @@ export const listByRestaurant = query({
     await requireRestaurantAccess(ctx, args.restaurantId);
     return await ctx.db
       .query("users")
-      .withIndex("by_restaurant", (q) => q.eq("restaurantId", args.restaurantId))
+      .withIndex("by_restaurant", (q) =>
+        q.eq("restaurantId", args.restaurantId),
+      )
       .collect();
   },
 });

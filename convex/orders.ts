@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireRestaurantAccess } from "./lib/auth";
+import { recordCustomerAction } from "./lib/staffNotifications";
+import { closeSessionWhenSettled } from "./lib/sessionLifecycle";
 
 /** Place an order from the current cart (clears cart after) */
 export const placeOrder = mutation({
@@ -13,7 +15,10 @@ export const placeOrder = mutation({
   handler: async (ctx, args) => {
     const session = await ctx.db.get("sessions", args.sessionId);
     if (!session || session.status !== "ACTIVE") {
-      throw new ConvexError({ message: "Session is not active", code: "BAD_REQUEST" });
+      throw new ConvexError({
+        message: "Session is not active",
+        code: "BAD_REQUEST",
+      });
     }
 
     const allCartItems = await ctx.db
@@ -26,9 +31,10 @@ export const placeOrder = mutation({
         q.eq("restaurantId", session.restaurantId).eq("key", "shared_cart"),
       )
       .unique();
-    const cartItems = sharedCartFlag?.enabled === false
-      ? allCartItems.filter((item) => item.addedBy === args.customerId)
-      : allCartItems;
+    const cartItems =
+      sharedCartFlag?.enabled === false
+        ? allCartItems.filter((item) => item.addedBy === args.customerId)
+        : allCartItems;
 
     if (cartItems.length === 0) {
       throw new ConvexError({ message: "Cart is empty", code: "BAD_REQUEST" });
@@ -43,7 +49,10 @@ export const placeOrder = mutation({
           !menuItem.isAvailable ||
           menuItem.restaurantId !== session.restaurantId
         ) {
-          throw new ConvexError({ message: "A menu item is no longer available", code: "BAD_REQUEST" });
+          throw new ConvexError({
+            message: "A menu item is no longer available",
+            code: "BAD_REQUEST",
+          });
         }
         return {
           menuItemId: ci.menuItemId,
@@ -55,21 +64,29 @@ export const placeOrder = mutation({
       }),
     );
 
-    const subtotal = orderItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const subtotal = orderItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
+    );
     const now = new Date().toISOString();
-    // 3-minute cancellation window
-    const cancellationDeadline = new Date(Date.now() + 3 * 60 * 1000).toISOString();
-
     const orderId = await ctx.db.insert("orders", {
       restaurantId: session.restaurantId,
       sessionId: args.sessionId,
       tableId: session.tableId,
       status: "PENDING",
+      customerId: args.customerId,
       items: orderItems,
       subtotal,
       total: subtotal,
       placedAt: now,
-      cancellationDeadline,
+    });
+    await recordCustomerAction(ctx, {
+      restaurantId: session.restaurantId,
+      sessionId: args.sessionId,
+      tableId: session.tableId,
+      orderId,
+      eventType: "ORDER_PLACED",
+      message: `New order: ${orderItems.length} item type${orderItems.length === 1 ? "" : "s"}.`,
     });
 
     // Clear cart after placing order
@@ -87,6 +104,13 @@ export const placeOrder = mutation({
         status: "PENDING",
         requestedAt: now,
       });
+      await recordCustomerAction(ctx, {
+        restaurantId: session.restaurantId,
+        sessionId: args.sessionId,
+        tableId: session.tableId,
+        eventType: "WATER_REQUESTED",
+        message: "Customer requested drinking water.",
+      });
     }
 
     // Update session totalAmount
@@ -99,16 +123,24 @@ export const placeOrder = mutation({
   },
 });
 
-/** Cancel an order — only within 3-min window, only if not PREPARING/READY/DELIVERED */
+/** Customer cancellation is allowed until preparation begins. */
 export const cancelOrder = mutation({
   args: {
     orderId: v.id("orders"),
     customerId: v.string(),
     reason: v.optional(v.string()),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
     const order = await ctx.db.get("orders", args.orderId);
-    if (!order) throw new ConvexError({ message: "Order not found", code: "NOT_FOUND" });
+    if (!order)
+      throw new ConvexError({ message: "Order not found", code: "NOT_FOUND" });
+    if (order.customerId && order.customerId !== args.customerId) {
+      throw new ConvexError({
+        message: "This order belongs to another customer",
+        code: "FORBIDDEN",
+      });
+    }
 
     if (
       order.status === "PREPARING" ||
@@ -122,9 +154,11 @@ export const cancelOrder = mutation({
       });
     }
 
-    if (order.cancellationDeadline && new Date() > new Date(order.cancellationDeadline)) {
+    const session = await ctx.db.get("sessions", order.sessionId);
+    if ((session?.paidAmount ?? 0) > 0) {
       throw new ConvexError({
-        message: "Cancellation window has expired (3 minutes from placing)",
+        message:
+          "This order cannot be cancelled after payment has been recorded",
         code: "BAD_REQUEST",
       });
     }
@@ -138,11 +172,21 @@ export const cancelOrder = mutation({
     });
 
     // Subtract from session totalAmount
-    const session = await ctx.db.get("sessions", order.sessionId);
     if (session) {
       const newTotal = Math.max(0, (session.totalAmount ?? 0) - order.total);
-      await ctx.db.patch("sessions", order.sessionId, { totalAmount: newTotal });
+      await ctx.db.patch("sessions", order.sessionId, {
+        totalAmount: newTotal,
+      });
+      await recordCustomerAction(ctx, {
+        restaurantId: order.restaurantId,
+        sessionId: order.sessionId,
+        tableId: order.tableId,
+        orderId: order._id,
+        eventType: "ORDER_CANCELLED",
+        message: `Customer cancelled order #${order._id.slice(-5).toUpperCase()}.`,
+      });
     }
+    return null;
   },
 });
 
@@ -171,8 +215,9 @@ export const updateStatus = mutation({
       v.literal("CANCELLED"),
     ),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
-    await requireRestaurantAccess(ctx, args.restaurantId);
+    const user = await requireRestaurantAccess(ctx, args.restaurantId);
 
     const order = await ctx.db.get("orders", args.orderId);
     if (!order || order.restaurantId !== args.restaurantId) {
@@ -185,9 +230,15 @@ export const updateStatus = mutation({
     if (args.status === "PREPARING") patch.preparingAt = now;
     if (args.status === "READY") patch.readyAt = now;
     if (args.status === "DELIVERED") patch.deliveredAt = now;
-    if (args.status === "CANCELLED") { patch.cancelledAt = now; }
+    if (args.status === "CANCELLED") {
+      patch.cancelledAt = now;
+    }
 
     await ctx.db.patch("orders", args.orderId, patch);
+    if (args.status === "DELIVERED") {
+      await closeSessionWhenSettled(ctx, order.sessionId, user._id);
+    }
+    return null;
   },
 });
 
@@ -199,14 +250,19 @@ export const listActiveForRestaurant = query({
 
     const orders = await ctx.db
       .query("orders")
-      .withIndex("by_restaurant", (q) => q.eq("restaurantId", args.restaurantId))
+      .withIndex("by_restaurant", (q) =>
+        q.eq("restaurantId", args.restaurantId),
+      )
       .order("desc")
       .take(100);
 
     return await Promise.all(
       orders.map(async (order) => {
         const table = await ctx.db.get("tables", order.tableId);
-        return { ...order, tableDisplayName: table?.displayName ?? table?.tableNumber ?? "Table" };
+        return {
+          ...order,
+          tableDisplayName: table?.displayName ?? table?.tableNumber ?? "Table",
+        };
       }),
     );
   },

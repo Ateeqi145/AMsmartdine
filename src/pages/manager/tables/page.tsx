@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api.js";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -6,31 +6,78 @@ import { Skeleton } from "@/components/ui/skeleton.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Card, CardContent } from "@/components/ui/card.tsx";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { toast } from "sonner";
 import {
-  Plus, QrCode, RefreshCw, Printer, Download, Trash2,
-  Users, ToggleLeft, Pencil, ExternalLink,
+  Plus,
+  QrCode,
+  RefreshCw,
+  Printer,
+  Download,
+  Trash2,
+  Users,
+  ToggleLeft,
+  Pencil,
+  ExternalLink,
 } from "lucide-react";
 import QRCode from "qrcode";
 
 // ─── QR Canvas Component ──────────────────────────────────────────
 function QrCanvas({ token, size = 160 }: { token: string; size?: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [result, setResult] = useState<{
+    key: string;
+    imageUrl: string;
+    failed: boolean;
+  } | null>(null);
+  const key = `${token}:${size}`;
 
   useEffect(() => {
-    if (!canvasRef.current) return;
+    let active = true;
     const url = `${window.location.origin}/table/${token}`;
-    QRCode.toCanvas(canvasRef.current, url, {
+    QRCode.toDataURL(url, {
       width: size,
       margin: 2,
       color: { dark: "#1a1209", light: "#ffffff" },
-    });
-  }, [token, size]);
+    })
+      .then((dataUrl) => {
+        if (active) setResult({ key, imageUrl: dataUrl, failed: false });
+      })
+      .catch((error: unknown) => {
+        console.error("Could not generate the table QR code.", error);
+        if (active) setResult({ key, imageUrl: "", failed: true });
+      });
+    return () => {
+      active = false;
+    };
+  }, [key, token, size]);
 
-  return <canvas ref={canvasRef} className="rounded-lg" />;
+  const imageUrl = result?.key === key ? result.imageUrl : "";
+  const failed = result?.key === key && result.failed;
+
+  return imageUrl ? (
+    <img
+      src={imageUrl}
+      width={size}
+      height={size}
+      alt={`QR code for ${token}`}
+      className="block rounded-lg"
+    />
+  ) : (
+    <div
+      className="grid place-items-center px-2 text-center text-xs text-muted-foreground"
+      style={{ width: size, height: size }}
+    >
+      {failed ? "QR unavailable" : "Generating QR…"}
+    </div>
+  );
 }
 
 // ─── QR Print Dialog ─────────────────────────────────────────────
@@ -40,28 +87,60 @@ function QrPrintDialog({
   open,
   onClose,
 }: {
-  table: { _id: string; tableNumber: string; displayName?: string; qrCodeToken: string };
+  table: {
+    _id: string;
+    tableNumber: string;
+    displayName?: string;
+    qrCodeToken: string;
+  };
   restaurantName: string;
   open: boolean;
   onClose: () => void;
 }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [result, setResult] = useState<{
+    token: string;
+    imageUrl: string;
+    failed: boolean;
+  } | null>(null);
+  const imageUrl = result?.token === table.qrCodeToken ? result.imageUrl : "";
+  const failed = result?.token === table.qrCodeToken && result.failed;
 
   useEffect(() => {
-    if (!open || !canvasRef.current) return;
+    if (!open) return;
+    let active = true;
     const url = `${window.location.origin}/table/${table.qrCodeToken}`;
-    QRCode.toCanvas(canvasRef.current, url, {
+    QRCode.toDataURL(url, {
       width: 256,
       margin: 2,
       color: { dark: "#1a1209", light: "#ffffff" },
-    });
+    })
+      .then((dataUrl) => {
+        if (active)
+          setResult({
+            token: table.qrCodeToken,
+            imageUrl: dataUrl,
+            failed: false,
+          });
+      })
+      .catch((error: unknown) => {
+        console.error("Could not generate the table QR code.", error);
+        if (active)
+          setResult({
+            token: table.qrCodeToken,
+            imageUrl: "",
+            failed: true,
+          });
+      });
+    return () => {
+      active = false;
+    };
   }, [open, table.qrCodeToken]);
 
   const handleDownload = () => {
-    if (!canvasRef.current) return;
+    if (!imageUrl) return;
     const link = document.createElement("a");
     link.download = `qr-${table.tableNumber}.png`;
-    link.href = canvasRef.current.toDataURL("image/png");
+    link.href = imageUrl;
     link.click();
   };
 
@@ -71,25 +150,53 @@ function QrPrintDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>QR Code — {table.displayName ?? `Table ${table.tableNumber}`}</DialogTitle>
+          <DialogTitle>
+            QR Code — {table.displayName ?? `Table ${table.tableNumber}`}
+          </DialogTitle>
         </DialogHeader>
         <div className="flex flex-col items-center gap-4">
           <div className="p-4 bg-white rounded-2xl shadow-inner border">
-            <canvas ref={canvasRef} className="rounded-lg" />
+            {imageUrl ? (
+              <img
+                src={imageUrl}
+                width={256}
+                height={256}
+                alt={`QR code for ${table.tableNumber}`}
+                className="block rounded-lg"
+              />
+            ) : (
+              <div className="grid size-64 place-items-center text-sm text-muted-foreground">
+                {failed ? "QR could not be generated" : "Generating QR…"}
+              </div>
+            )}
           </div>
           <div className="text-center space-y-1">
             <p className="font-bold text-lg">{restaurantName}</p>
-            <p className="text-sm text-muted-foreground">{table.displayName ?? `Table ${table.tableNumber}`}</p>
-            <p className="text-xs text-muted-foreground font-mono break-all">{tableUrl}</p>
+            <p className="text-sm text-muted-foreground">
+              {table.displayName ?? `Table ${table.tableNumber}`}
+            </p>
+            <p className="text-xs text-muted-foreground font-mono break-all">
+              {tableUrl}
+            </p>
           </div>
         </div>
         <DialogFooter className="gap-2">
-          <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button variant="ghost" className="gap-1.5" onClick={() => window.open(tableUrl, "_blank")}>
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          <Button
+            variant="ghost"
+            className="gap-1.5"
+            onClick={() => window.open(tableUrl, "_blank")}
+          >
             <ExternalLink className="w-3.5 h-3.5" />
             Test Link
           </Button>
-          <Button className="gap-1.5" onClick={handleDownload}>
+          <Button
+            className="gap-1.5"
+            disabled={!imageUrl}
+            onClick={handleDownload}
+          >
             <Download className="w-3.5 h-3.5" />
             Download PNG
           </Button>
@@ -107,7 +214,12 @@ function TableDialog({
   onClose,
 }: {
   restaurantId: Id<"restaurants">;
-  editTable?: { _id: string; tableNumber: string; displayName?: string; capacity?: number };
+  editTable?: {
+    _id: string;
+    tableNumber: string;
+    displayName?: string;
+    capacity?: number;
+  };
   open: boolean;
   onClose: () => void;
 }) {
@@ -120,17 +232,12 @@ function TableDialog({
   });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    setForm({
-      tableNumber: editTable?.tableNumber ?? "",
-      displayName: editTable?.displayName ?? "",
-      capacity: editTable?.capacity?.toString() ?? "",
-    });
-  }, [editTable, open]);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.tableNumber.trim()) { toast.error("Table number is required"); return; }
+    if (!form.tableNumber.trim()) {
+      toast.error("Table number is required");
+      return;
+    }
     setLoading(true);
     try {
       if (editTable) {
@@ -170,7 +277,9 @@ function TableDialog({
             <Input
               placeholder="T1, A3, Bar-1…"
               value={form.tableNumber}
-              onChange={(e) => setForm((f) => ({ ...f, tableNumber: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, tableNumber: e.target.value }))
+              }
               disabled={!!editTable}
             />
           </div>
@@ -179,7 +288,9 @@ function TableDialog({
             <Input
               placeholder="Window Table, VIP Booth…"
               value={form.displayName}
-              onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, displayName: e.target.value }))
+              }
             />
           </div>
           <div className="space-y-1.5">
@@ -189,12 +300,18 @@ function TableDialog({
               min="1"
               placeholder="4"
               value={form.capacity}
-              onChange={(e) => setForm((f) => ({ ...f, capacity: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, capacity: e.target.value }))
+              }
             />
           </div>
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? "Saving…" : editTable ? "Save Changes" : "Add Table"}</Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Saving…" : editTable ? "Save Changes" : "Add Table"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -207,14 +324,24 @@ export default function ManagerTablesPage() {
   const restaurant = useQuery(api.users.getCurrentUserRestaurant, {});
   const rid = restaurant?._id as Id<"restaurants"> | undefined;
 
-  const tables = useQuery(api.tables.listByRestaurant, rid ? { restaurantId: rid } : "skip");
+  const tables = useQuery(
+    api.tables.listByRestaurant,
+    rid ? { restaurantId: rid } : "skip",
+  );
   const removeTable = useMutation(api.tables.remove);
   const regenerateQr = useMutation(api.tables.regenerateQr);
   const toggleActive = useMutation(api.tables.update);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [editTable, setEditTable] = useState<typeof tables extends undefined ? never : NonNullable<typeof tables>[0] | null>(null);
-  const [qrTable, setQrTable] = useState<NonNullable<typeof tables>[0] | null>(null);
+  const [editTable, setEditTable] =
+    useState<
+      typeof tables extends undefined
+        ? never
+        : NonNullable<typeof tables>[0] | null
+    >(null);
+  const [qrTable, setQrTable] = useState<NonNullable<typeof tables>[0] | null>(
+    null,
+  );
 
   const handleDelete = async (table: NonNullable<typeof tables>[0]) => {
     if (!rid) return;
@@ -239,7 +366,11 @@ export default function ManagerTablesPage() {
   const handleToggleActive = async (table: NonNullable<typeof tables>[0]) => {
     if (!rid) return;
     try {
-      await toggleActive({ tableId: table._id, restaurantId: rid, isActive: !table.isActive });
+      await toggleActive({
+        tableId: table._id,
+        restaurantId: rid,
+        isActive: !table.isActive,
+      });
       toast.success(table.isActive ? "Table deactivated" : "Table activated");
     } catch {
       toast.error("Failed to update table");
@@ -250,7 +381,9 @@ export default function ManagerTablesPage() {
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Tables & QR Codes</h1>
+          <h1 className="text-2xl font-bold tracking-tight">
+            Tables & QR Codes
+          </h1>
           <p className="text-muted-foreground text-sm mt-0.5">
             One permanent QR per table · Scan to start ordering
           </p>
@@ -263,14 +396,18 @@ export default function ManagerTablesPage() {
 
       {tables === undefined ? (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-52 w-full rounded-2xl" />)}
+          {[...Array(6)].map((_, i) => (
+            <Skeleton key={i} className="h-52 w-full rounded-2xl" />
+          ))}
         </div>
       ) : tables.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center space-y-3">
             <QrCode className="w-10 h-10 text-muted-foreground/40 mx-auto" />
             <p className="font-medium">No tables yet</p>
-            <p className="text-sm text-muted-foreground">Add your first table to generate a QR code</p>
+            <p className="text-sm text-muted-foreground">
+              Add your first table to generate a QR code
+            </p>
             <Button className="mt-2 gap-2" onClick={() => setCreateOpen(true)}>
               <Plus className="w-4 h-4" />
               Add Table
@@ -297,10 +434,17 @@ export default function ManagerTablesPage() {
                 <div className="p-3 space-y-2 border-t">
                   <div className="flex items-start justify-between gap-1">
                     <div>
-                      <p className="font-bold text-sm">{table.displayName ?? `Table ${table.tableNumber}`}</p>
-                      <p className="text-xs text-muted-foreground font-mono">#{table.tableNumber}</p>
+                      <p className="font-bold text-sm">
+                        {table.displayName ?? `Table ${table.tableNumber}`}
+                      </p>
+                      <p className="text-xs text-muted-foreground font-mono">
+                        #{table.tableNumber}
+                      </p>
                     </div>
-                    <Badge variant={table.isActive ? "default" : "secondary"} className="text-[10px] flex-shrink-0">
+                    <Badge
+                      variant={table.isActive ? "default" : "secondary"}
+                      className="text-[10px] flex-shrink-0"
+                    >
                       {table.isActive ? "Active" : "Off"}
                     </Badge>
                   </div>
@@ -355,10 +499,10 @@ export default function ManagerTablesPage() {
       )}
 
       {/* Dialogs */}
-      {rid && (
+      {rid && createOpen && (
         <TableDialog
           restaurantId={rid}
-          open={createOpen}
+          open
           onClose={() => setCreateOpen(false)}
         />
       )}

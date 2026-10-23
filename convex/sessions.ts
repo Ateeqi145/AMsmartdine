@@ -2,18 +2,32 @@ import { mutation, query } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
 import { requireRestaurantAccess, requireRestaurantManager } from "./lib/auth";
 import type { Doc } from "./_generated/dataModel";
+import { recordCustomerAction } from "./lib/staffNotifications";
+import { closeSessionWhenSettled } from "./lib/sessionLifecycle";
 
 /** List active sessions with table details (for manager dashboard) */
 export const listActiveSessions = query({
   args: { restaurantId: v.id("restaurants") },
-  handler: async (ctx, args): Promise<Array<Doc<"sessions"> & { tableNumber: string }>> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Array<Doc<"sessions"> & { tableNumber: string }>> => {
     await requireRestaurantAccess(ctx, args.restaurantId);
-    const sessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_restaurant_status", (q) =>
-        q.eq("restaurantId", args.restaurantId).eq("status", "ACTIVE"),
-      )
-      .collect();
+    const [active, billing] = await Promise.all([
+      ctx.db
+        .query("sessions")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "ACTIVE"),
+        )
+        .take(200),
+      ctx.db
+        .query("sessions")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "BILLING"),
+        )
+        .take(200),
+    ]);
+    const sessions = [...active, ...billing];
 
     return await Promise.all(
       sessions.map(async (s) => {
@@ -28,10 +42,17 @@ export const listActiveSessions = query({
 export const getActiveForTable = query({
   args: { tableId: v.id("tables") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const active = await ctx.db
       .query("sessions")
       .withIndex("by_table_status", (q) =>
         q.eq("tableId", args.tableId).eq("status", "ACTIVE"),
+      )
+      .first();
+    if (active) return active;
+    return await ctx.db
+      .query("sessions")
+      .withIndex("by_table_status", (q) =>
+        q.eq("tableId", args.tableId).eq("status", "BILLING"),
       )
       .first();
   },
@@ -58,33 +79,84 @@ export const openOrJoinSession = mutation({
     tableId: v.id("tables"),
     restaurantId: v.id("restaurants"),
     customerCount: v.number(), // number of people joining (used when creating a new session)
+    customerId: v.string(),
   },
+  returns: v.object({ sessionId: v.id("sessions"), isNew: v.boolean() }),
   handler: async (ctx, args) => {
-    // Enforce one active session per table
-    const existing = await ctx.db
-      .query("sessions")
-      .withIndex("by_table_status", (q) =>
-        q.eq("tableId", args.tableId).eq("status", "ACTIVE"),
-      )
-      .first();
+    if (!Number.isInteger(args.customerCount) || args.customerCount < 1) {
+      throw new ConvexError({
+        message: "Customer count must be at least one",
+        code: "BAD_REQUEST",
+      });
+    }
+    const table = await ctx.db.get("tables", args.tableId);
+    const restaurant = await ctx.db.get("restaurants", args.restaurantId);
+    if (
+      !table ||
+      table.restaurantId !== args.restaurantId ||
+      !table.isActive ||
+      !restaurant?.isActive
+    ) {
+      throw new ConvexError({
+        message: "Table is unavailable",
+        code: "BAD_REQUEST",
+      });
+    }
+
+    const [active, billing] = await Promise.all([
+      ctx.db
+        .query("sessions")
+        .withIndex("by_table_status", (q) =>
+          q.eq("tableId", args.tableId).eq("status", "ACTIVE"),
+        )
+        .first(),
+      ctx.db
+        .query("sessions")
+        .withIndex("by_table_status", (q) =>
+          q.eq("tableId", args.tableId).eq("status", "BILLING"),
+        )
+        .first(),
+    ]);
+    const existing = active ?? billing;
 
     if (existing) {
-      // Join existing session — increment customer count
-      await ctx.db.patch("sessions", existing._id, {
-        customerCount: existing.customerCount + args.customerCount,
-      });
+      const alreadyJoined = await ctx.db
+        .query("sessionVisitors")
+        .withIndex("by_session_and_customer", (q) =>
+          q.eq("sessionId", existing._id).eq("customerId", args.customerId),
+        )
+        .first();
+      if (!alreadyJoined) {
+        await ctx.db.insert("sessionVisitors", {
+          sessionId: existing._id,
+          customerId: args.customerId,
+          joinedAt: new Date().toISOString(),
+        });
+        await ctx.db.patch("sessions", existing._id, {
+          customerCount: existing.customerCount + args.customerCount,
+        });
+      }
       return { sessionId: existing._id, isNew: false };
     }
 
-    // Open a new session with daily customer count tracking
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    // Sum all sessions opened today for this restaurant for daily customer count
     const sessionId = await ctx.db.insert("sessions", {
       restaurantId: args.restaurantId,
       tableId: args.tableId,
       status: "ACTIVE",
       customerCount: args.customerCount,
       openedAt: new Date().toISOString(),
+    });
+    await ctx.db.insert("sessionVisitors", {
+      sessionId,
+      customerId: args.customerId,
+      joinedAt: new Date().toISOString(),
+    });
+    await recordCustomerAction(ctx, {
+      restaurantId: args.restaurantId,
+      sessionId,
+      tableId: args.tableId,
+      eventType: "TABLE_SESSION_OPENED",
+      message: `A customer opened a table session at ${table.displayName ?? table.tableNumber}.`,
     });
 
     return { sessionId, isNew: true };
@@ -125,10 +197,13 @@ export const closeSession = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    await requireRestaurantManager(ctx, args.restaurantId);
+    const user = await requireRestaurantManager(ctx, args.restaurantId);
     const session = await ctx.db.get("sessions", args.sessionId);
     if (!session || session.restaurantId !== args.restaurantId) {
-      throw new ConvexError({ message: "Session not found", code: "NOT_FOUND" });
+      throw new ConvexError({
+        message: "Session not found",
+        code: "NOT_FOUND",
+      });
     }
     if ((session.paidAmount ?? 0) < (session.totalAmount ?? 0)) {
       throw new ConvexError({
@@ -136,10 +211,13 @@ export const closeSession = mutation({
         code: "BAD_REQUEST",
       });
     }
-    await ctx.db.patch("sessions", args.sessionId, {
-      status: "CLOSED",
-      closedAt: new Date().toISOString(),
-    });
+    if (!(await closeSessionWhenSettled(ctx, args.sessionId, user._id))) {
+      throw new ConvexError({
+        message:
+          "All non-cancelled orders must be delivered before closing the session",
+        code: "BAD_REQUEST",
+      });
+    }
     return null;
   },
 });
@@ -150,10 +228,31 @@ export const requestBill = mutation({
     sessionId: v.id("sessions"),
     restaurantId: v.id("restaurants"),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (
+      !session ||
+      session.restaurantId !== args.restaurantId ||
+      session.status !== "ACTIVE"
+    ) {
+      throw new ConvexError({
+        message: "Session is not active",
+        code: "BAD_REQUEST",
+      });
+    }
+    const now = new Date().toISOString();
     await ctx.db.patch("sessions", args.sessionId, {
       status: "BILLING",
-      billRequestedAt: new Date().toISOString(),
+      billRequestedAt: now,
     });
+    await recordCustomerAction(ctx, {
+      restaurantId: session.restaurantId,
+      sessionId: args.sessionId,
+      tableId: session.tableId,
+      eventType: "BILL_REQUESTED",
+      message: "Customer requested the bill.",
+    });
+    return null;
   },
 });

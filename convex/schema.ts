@@ -68,7 +68,8 @@ export default defineSchema({
     .index("email", ["email"])
     .index("by_token", ["tokenIdentifier"])
     .index("by_restaurant", ["restaurantId"])
-    .index("by_role", ["role"]),
+    .index("by_role", ["role"])
+    .index("by_role_and_restaurant", ["role", "restaurantId"]),
 
   // ── Restaurants ───────────────────────────────────────────────────
   restaurants: defineTable({
@@ -138,6 +139,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     price: v.number(), // in lowest denomination (paise)
     imageUrl: v.optional(v.string()),
+    imageStorageId: v.optional(v.id("_storage")),
     isVeg: v.optional(v.boolean()),
     isAvailable: v.boolean(),
     sortOrder: v.number(),
@@ -170,6 +172,13 @@ export default defineSchema({
     .index("by_table_status", ["tableId", "status"])
     .index("by_restaurant_status", ["restaurantId", "status"]),
 
+  // ── Customer devices joined to a session ─────────────────────────
+  sessionVisitors: defineTable({
+    sessionId: v.id("sessions"),
+    customerId: v.string(),
+    joinedAt: v.string(),
+  }).index("by_session_and_customer", ["sessionId", "customerId"]),
+
   // ── Cart items (shared realtime cart per session) ─────────────────
   cartItems: defineTable({
     restaurantId: v.id("restaurants"),
@@ -190,6 +199,7 @@ export default defineSchema({
     sessionId: v.id("sessions"),
     tableId: v.id("tables"),
     status: orderStatus,
+    customerId: v.optional(v.string()),
     items: v.array(
       v.object({
         menuItemId: v.id("menuItems"),
@@ -216,6 +226,7 @@ export default defineSchema({
   })
     .index("by_restaurant", ["restaurantId"])
     .index("by_session", ["sessionId"])
+    .index("by_session_and_status", ["sessionId", "status"])
     .index("by_table", ["tableId"])
     .index("by_restaurant_status", ["restaurantId", "status"]),
 
@@ -279,6 +290,30 @@ export default defineSchema({
     submittedAt: v.string(),
   })
     .index("by_restaurant", ["restaurantId"])
+    .index("by_session", ["sessionId"]),
+
+  // ── Recent customer actions shown to staff ───────────────────────
+  staffNotifications: defineTable({
+    restaurantId: v.id("restaurants"),
+    sessionId: v.id("sessions"),
+    tableId: v.id("tables"),
+    eventType: v.union(
+      v.literal("TABLE_SESSION_OPENED"),
+      v.literal("CART_CHANGED"),
+      v.literal("ORDER_PLACED"),
+      v.literal("ORDER_CANCELLED"),
+      v.literal("WAITER_REQUESTED"),
+      v.literal("BILL_REQUESTED"),
+      v.literal("CASH_PAYMENT_REQUESTED"),
+      v.literal("PAYMENT_CONFIRMED"),
+      v.literal("WATER_REQUESTED"),
+      v.literal("FEEDBACK_SUBMITTED"),
+    ),
+    orderId: v.optional(v.id("orders")),
+    message: v.string(),
+    createdAt: v.string(),
+  })
+    .index("by_restaurant_and_created_at", ["restaurantId", "createdAt"])
     .index("by_session", ["sessionId"]),
 
   // ── Audit logs ────────────────────────────────────────────────────

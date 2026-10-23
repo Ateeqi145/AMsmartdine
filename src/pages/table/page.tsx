@@ -5,6 +5,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
   BellRing,
+  Ban,
   Check,
   ChefHat,
   ChevronRight,
@@ -30,6 +31,7 @@ import {
 } from "@/components/ui/sheet.tsx";
 import { CustomerBillPanel } from "./_components/customer-bill-page";
 import { toast } from "sonner";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 function getCustomerId() {
   const storageKey = "smartdine-customer-id";
@@ -39,6 +41,12 @@ function getCustomerId() {
   const customerId = window.crypto.randomUUID();
   window.localStorage.setItem(storageKey, customerId);
   return customerId;
+}
+
+function getSavedSessionId(qrToken?: string): Id<"sessions"> | null {
+  if (!qrToken) return null;
+  const saved = window.localStorage.getItem(`smartdine-session:${qrToken}`);
+  return saved ? (saved as Id<"sessions">) : null;
 }
 
 function formatPrice(amountInPaise: number, currency: string) {
@@ -78,7 +86,20 @@ export default function TablePage() {
     tableInfo?.restaurant ? { restaurantId: tableInfo.restaurant._id } : "skip",
   );
   const openOrJoinSession = useMutation(api.sessions.openOrJoinSession);
-  const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(null);
+  const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(() =>
+    getSavedSessionId(qrToken),
+  );
+  const session = useQuery(
+    api.sessions.getById,
+    sessionId ? { sessionId } : "skip",
+  );
+  const savedSessionIsStale = Boolean(
+    sessionId &&
+    session !== undefined &&
+    tableInfo?.table &&
+    (!session || session.table?._id !== tableInfo.table._id),
+  );
+  const activeSessionId = savedSessionIsStale ? null : sessionId;
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [customerId] = useState(getCustomerId);
@@ -91,25 +112,47 @@ export default function TablePage() {
   const [placingOrder, setPlacingOrder] = useState(false);
   const [callingWaiter, setCallingWaiter] = useState(false);
   const [placedOrderId, setPlacedOrderId] = useState<Id<"orders"> | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] =
+    useState<Id<"orders"> | null>(null);
 
   useEffect(() => {
     const table = tableInfo?.table;
     const restaurant = tableInfo?.restaurant;
-    if (!table || !restaurant || !table.isActive || !restaurant.isActive || sessionId) return;
+    if (
+      !table ||
+      !restaurant ||
+      !table.isActive ||
+      !restaurant.isActive ||
+      activeSessionId
+    )
+      return;
+
+    if (savedSessionIsStale && qrToken) {
+      window.localStorage.removeItem(`smartdine-session:${qrToken}`);
+    }
 
     let active = true;
     openOrJoinSession({
       tableId: table._id,
       restaurantId: restaurant._id,
       customerCount: 1,
+      customerId,
     })
       .then(({ sessionId: openedSessionId }) => {
-        if (active) setSessionId(openedSessionId);
+        if (active) {
+          window.localStorage.setItem(
+            `smartdine-session:${qrToken}`,
+            openedSessionId,
+          );
+          setSessionId(openedSessionId);
+        }
       })
       .catch((error: unknown) => {
         if (active) {
           setSessionError(
-            error instanceof Error ? error.message : "Could not open this table session.",
+            error instanceof Error
+              ? error.message
+              : "Could not open this table session.",
           );
         }
       });
@@ -117,7 +160,15 @@ export default function TablePage() {
     return () => {
       active = false;
     };
-  }, [openOrJoinSession, sessionId, sessionRetry, tableInfo]);
+  }, [
+    customerId,
+    openOrJoinSession,
+    qrToken,
+    activeSessionId,
+    savedSessionIsStale,
+    sessionRetry,
+    tableInfo,
+  ]);
 
   const menuCategories = useQuery(
     api.menu.listCategoriesPublic,
@@ -127,21 +178,18 @@ export default function TablePage() {
     api.menu.listItemsPublic,
     tableInfo?.restaurant ? { restaurantId: tableInfo.restaurant._id } : "skip",
   );
-  const session = useQuery(
-    api.sessions.getById,
-    sessionId ? { sessionId } : "skip",
-  );
   const cart = useQuery(
     api.cart.getCart,
-    sessionId ? { sessionId, customerId } : "skip",
+    activeSessionId ? { sessionId: activeSessionId, customerId } : "skip",
   );
   const orders = useQuery(
     api.orders.listBySession,
-    sessionId ? { sessionId } : "skip",
+    activeSessionId ? { sessionId: activeSessionId } : "skip",
   );
   const addToCart = useMutation(api.cart.addToCart);
   const updateCartItem = useMutation(api.cart.updateCartItem);
   const placeOrder = useMutation(api.orders.placeOrder);
+  const cancelOrder = useMutation(api.orders.cancelOrder);
   const createWaiterRequest = useMutation(api.waiterRequests.create);
 
   const activeCategories = useMemo(
@@ -152,8 +200,7 @@ export default function TablePage() {
     [menuCategories],
   );
   const availableItems = useMemo(
-    () =>
-      (menuItems ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder),
+    () => (menuItems ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder),
     [menuItems],
   );
   const cartEntries = useMemo(
@@ -164,14 +211,19 @@ export default function TablePage() {
     (total, entry) => total + entry.menuItem!.price * entry.quantity,
     0,
   );
-  const itemCount = cartEntries.reduce((total, entry) => total + entry.quantity, 0);
+  const itemCount = cartEntries.reduce(
+    (total, entry) => total + entry.quantity,
+    0,
+  );
   const currency = tableInfo?.restaurant?.currency ?? "INR";
   const isOrderable = session?.session.status === "ACTIVE";
-  const waiterEnabled = flags?.find((flag) => flag.key === "call_waiter")?.enabled ?? false;
+  const waiterEnabled =
+    flags?.find((flag) => flag.key === "call_waiter")?.enabled ?? false;
   const hasOrders = (orders?.length ?? 0) > 0;
 
   const visibleCategories = activeCategories.filter((category) => {
-    if (selectedCategory !== "all" && category._id !== selectedCategory) return false;
+    if (selectedCategory !== "all" && category._id !== selectedCategory)
+      return false;
     return availableItems.some(
       (item) =>
         item.categoryId === category._id &&
@@ -185,7 +237,7 @@ export default function TablePage() {
     cartEntries.find((entry) => entry.menuItemId === menuItemId);
 
   const changeQuantity = async (menuItemId: Id<"menuItems">, delta: number) => {
-    if (!sessionId || !isOrderable) return;
+    if (!activeSessionId || !isOrderable) return;
     setBusyItemId(menuItemId);
     try {
       const existing = quantityFor(menuItemId);
@@ -193,51 +245,94 @@ export default function TablePage() {
         await updateCartItem({
           cartItemId: existing._id,
           quantity: existing.quantity - 1,
+          customerId,
         });
       } else {
         await addToCart({
-          sessionId,
+          sessionId: activeSessionId,
           menuItemId,
           quantity: 1,
           customerId,
         });
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not update your order.");
+      toast.error(
+        error instanceof Error ? error.message : "Could not update your order.",
+      );
     } finally {
       setBusyItemId(null);
     }
   };
 
+  const handleCancelOrder = async (orderId: Id<"orders">) => {
+    if (cancellingOrderId) return;
+    setCancellingOrderId(orderId);
+    try {
+      await cancelOrder({
+        orderId,
+        customerId,
+        reason: "Cancelled by customer before preparation",
+      });
+      toast.success("Order cancelled");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not cancel the order.",
+      );
+    } finally {
+      setCancellingOrderId(null);
+    }
+  };
+
+  const startNewVisit = () => {
+    if (qrToken) window.localStorage.removeItem(`smartdine-session:${qrToken}`);
+    setBillOpen(false);
+    setSessionId(null);
+    setSessionError(null);
+  };
+
   const submitOrder = async () => {
-    if (!sessionId || !isOrderable || itemCount === 0) return;
+    if (!activeSessionId || !isOrderable || itemCount === 0) return;
     setPlacingOrder(true);
     try {
-      const orderId = await placeOrder({ sessionId, customerId, waterRequested });
+      const orderId = await placeOrder({
+        sessionId: activeSessionId,
+        customerId,
+        waterRequested,
+      });
       setPlacedOrderId(orderId);
       setWaterRequested(false);
       setCartOpen(false);
       toast.success("Order sent to the kitchen");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not place your order.");
+      toast.error(
+        error instanceof Error ? error.message : "Could not place your order.",
+      );
     } finally {
       setPlacingOrder(false);
     }
   };
 
   const callWaiter = async () => {
-    if (!sessionId || !tableInfo?.table || !tableInfo.restaurant || callingWaiter) return;
+    if (
+      !activeSessionId ||
+      !tableInfo?.table ||
+      !tableInfo.restaurant ||
+      callingWaiter
+    )
+      return;
     setCallingWaiter(true);
     try {
       await createWaiterRequest({
-        sessionId,
+        sessionId: activeSessionId,
         restaurantId: tableInfo.restaurant._id,
         tableId: tableInfo.table._id,
         type: "CALL",
       });
       toast.success("A waiter has been notified");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not call a waiter.");
+      toast.error(
+        error instanceof Error ? error.message : "Could not call a waiter.",
+      );
     } finally {
       setCallingWaiter(false);
     }
@@ -251,7 +346,12 @@ export default function TablePage() {
     );
   }
 
-  if (!tableInfo?.table || !tableInfo.restaurant || !tableInfo.table.isActive || !tableInfo.restaurant.isActive) {
+  if (
+    !tableInfo?.table ||
+    !tableInfo.restaurant ||
+    !tableInfo.table.isActive ||
+    !tableInfo.restaurant.isActive
+  ) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6">
         <section className="max-w-sm text-center">
@@ -260,7 +360,8 @@ export default function TablePage() {
           </div>
           <h1 className="text-xl font-semibold">This table is unavailable</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This QR code may be invalid, or the restaurant has temporarily disabled this table.
+            This QR code may be invalid, or the restaurant has temporarily
+            disabled this table.
           </p>
         </section>
       </main>
@@ -269,6 +370,39 @@ export default function TablePage() {
 
   const { table, restaurant } = tableInfo;
   const tableName = table.displayName ?? `Table ${table.tableNumber}`;
+
+  if (session?.session.status === "CLOSED" && activeSessionId) {
+    return (
+      <main className="min-h-screen bg-muted/30">
+        <header className="border-b bg-background">
+          <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-3">
+            <div>
+              <p className="text-sm font-bold">{restaurant.name}</p>
+              <p className="text-xs text-muted-foreground">{tableName}</p>
+            </div>
+            <ThemeToggle />
+          </div>
+        </header>
+        <section className="mx-auto max-w-2xl space-y-5 px-4 py-8">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+              Visit complete
+            </p>
+            <h1 className="mt-2 text-2xl font-bold">Thank you for dining</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Your bill is settled. We would love to hear how your visit went.
+            </p>
+          </div>
+          <div className="rounded-2xl border bg-background">
+            <CustomerBillPanel sessionId={activeSessionId} />
+          </div>
+          <Button className="w-full" variant="outline" onClick={startNewVisit}>
+            Start a new visit
+          </Button>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-muted/30 pb-32">
@@ -294,7 +428,7 @@ export default function TablePage() {
               <p className="text-xs text-muted-foreground">{tableName}</p>
             </div>
           </div>
-          {waiterEnabled && sessionId && (
+          {waiterEnabled && activeSessionId && (
             <Button
               variant="outline"
               size="sm"
@@ -303,9 +437,12 @@ export default function TablePage() {
               onClick={callWaiter}
             >
               <BellRing className="size-4" />
-              <span className="hidden sm:inline">{callingWaiter ? "Calling..." : "Waiter"}</span>
+              <span className="hidden sm:inline">
+                {callingWaiter ? "Calling..." : "Waiter"}
+              </span>
             </Button>
           )}
+          <ThemeToggle />
         </div>
       </header>
 
@@ -314,7 +451,9 @@ export default function TablePage() {
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
             Scan. Choose. Enjoy.
           </p>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight">{restaurant.name}</h1>
+          <h1 className="mt-2 text-3xl font-bold tracking-tight">
+            {restaurant.name}
+          </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Browse the menu and order straight to {tableName.toLowerCase()}.
           </p>
@@ -326,8 +465,13 @@ export default function TablePage() {
         </section>
 
         {sessionError && (
-          <div role="alert" className="mb-4 rounded-2xl border border-destructive/30 bg-destructive/5 p-4">
-            <p className="text-sm font-medium text-destructive">{sessionError}</p>
+          <div
+            role="alert"
+            className="mb-4 rounded-2xl border border-destructive/30 bg-destructive/5 p-4"
+          >
+            <p className="text-sm font-medium text-destructive">
+              {sessionError}
+            </p>
             <Button
               variant="outline"
               size="sm"
@@ -342,7 +486,7 @@ export default function TablePage() {
           </div>
         )}
 
-        {sessionId && !session && (
+        {activeSessionId && !session && (
           <div className="mb-4 flex items-center gap-3 rounded-2xl border bg-background p-4 text-sm text-muted-foreground">
             <Clock3 className="size-4 animate-pulse" />
             Connecting your table...
@@ -359,11 +503,16 @@ export default function TablePage() {
         )}
 
         {session?.session.status === "CLOSED" && (
-          <div className="mb-4 rounded-2xl border bg-background p-4 text-sm">
-            <p className="font-semibold">This table session is closed</p>
-            <p className="mt-1 text-muted-foreground">
-              Please ask a team member if you would like to order again.
-            </p>
+          <div className="mb-4 flex items-center justify-between gap-4 rounded-2xl border bg-background p-4 text-sm">
+            <div>
+              <p className="font-semibold">This table session is closed</p>
+              <p className="mt-1 text-muted-foreground">
+                Your bill is settled. Share feedback or start a new visit.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={startNewVisit}>
+              New visit
+            </Button>
           </div>
         )}
 
@@ -371,10 +520,14 @@ export default function TablePage() {
           <section aria-label="Your orders" className="mb-7 space-y-3">
             <div className="flex items-end justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Kitchen updates</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+                  Kitchen updates
+                </p>
                 <h2 className="mt-1 text-lg font-bold">Your orders</h2>
               </div>
-              <span className="text-xs text-muted-foreground">Updates live</span>
+              <span className="text-xs text-muted-foreground">
+                Updates live
+              </span>
             </div>
             {(orders ?? []).map((order) => (
               <article
@@ -385,10 +538,15 @@ export default function TablePage() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="font-semibold">Order #{order._id.slice(-5).toUpperCase()}</p>
+                    <p className="font-semibold">
+                      Order #{order._id.slice(-5).toUpperCase()}
+                    </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {order.items.reduce((sum, item) => sum + item.quantity, 0)} items ·{" "}
-                      {formatPrice(order.total, currency)}
+                      {order.items.reduce(
+                        (sum, item) => sum + item.quantity,
+                        0,
+                      )}{" "}
+                      items · {formatPrice(order.total, currency)}
                     </p>
                   </div>
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
@@ -397,9 +555,28 @@ export default function TablePage() {
                   </span>
                 </div>
                 <p className="mt-3 text-sm text-muted-foreground">
-                  {order.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}
+                  {order.items
+                    .map((item) => `${item.quantity} × ${item.name}`)
+                    .join(" · ")}
                 </p>
-                {(order.status === "PREPARING" || order.status === "CONFIRMED") && (
+                {(order.status === "PENDING" || order.status === "CONFIRMED") &&
+                  (!order.customerId || order.customerId === customerId) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3 gap-2 text-destructive hover:text-destructive"
+                      disabled={cancellingOrderId === order._id}
+                      onClick={() => void handleCancelOrder(order._id)}
+                    >
+                      <Ban className="size-3.5" />
+                      {cancellingOrderId === order._id
+                        ? "Cancelling…"
+                        : "Cancel order"}
+                    </Button>
+                  )}
+                {(order.status === "PREPARING" ||
+                  order.status === "CONFIRMED") && (
                   <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                     <ChefHat className="size-4 text-primary" />
                     The kitchen is working on your order.
@@ -419,11 +596,14 @@ export default function TablePage() {
         <section aria-label="Menu">
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Made for you</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+                Made for you
+              </p>
               <h2 className="mt-1 text-2xl font-bold">Menu</h2>
             </div>
             <span className="text-xs text-muted-foreground">
-              {availableItems.length} available {availableItems.length === 1 ? "item" : "items"}
+              {availableItems.length} available{" "}
+              {availableItems.length === 1 ? "item" : "items"}
             </span>
           </div>
 
@@ -487,7 +667,9 @@ export default function TablePage() {
                 <div className="rounded-3xl border border-dashed bg-background px-5 py-12 text-center">
                   <ShoppingBag className="mx-auto size-7 text-muted-foreground/60" />
                   <h3 className="mt-3 font-semibold">
-                    {search ? "No dishes match your search" : "The menu is being prepared"}
+                    {search
+                      ? "No dishes match your search"
+                      : "The menu is being prepared"}
                   </h3>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {search
@@ -502,8 +684,12 @@ export default function TablePage() {
                       (item) =>
                         item.categoryId === category._id &&
                         (!search ||
-                          item.name.toLowerCase().includes(search.toLowerCase()) ||
-                          item.description?.toLowerCase().includes(search.toLowerCase())),
+                          item.name
+                            .toLowerCase()
+                            .includes(search.toLowerCase()) ||
+                          item.description
+                            ?.toLowerCase()
+                            .includes(search.toLowerCase())),
                     );
                     if (items.length === 0) return null;
                     return (
@@ -511,7 +697,9 @@ export default function TablePage() {
                         <div className="mb-3">
                           <h3 className="text-lg font-bold">{category.name}</h3>
                           {category.description && (
-                            <p className="mt-1 text-sm text-muted-foreground">{category.description}</p>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              {category.description}
+                            </p>
                           )}
                         </div>
                         <div className="space-y-3">
@@ -526,8 +714,16 @@ export default function TablePage() {
                                   <div className="flex items-center gap-1.5">
                                     {item.isVeg !== undefined && (
                                       <span
-                                        aria-label={item.isVeg ? "Vegetarian" : "Non-vegetarian"}
-                                        title={item.isVeg ? "Vegetarian" : "Non-vegetarian"}
+                                        aria-label={
+                                          item.isVeg
+                                            ? "Vegetarian"
+                                            : "Non-vegetarian"
+                                        }
+                                        title={
+                                          item.isVeg
+                                            ? "Vegetarian"
+                                            : "Non-vegetarian"
+                                        }
                                         className={`flex size-4 items-center justify-center rounded-[4px] border ${
                                           item.isVeg
                                             ? "border-green-600 text-green-600"
@@ -536,7 +732,9 @@ export default function TablePage() {
                                       >
                                         <span
                                           className={`size-1.5 rounded-full ${
-                                            item.isVeg ? "bg-green-600" : "bg-red-600"
+                                            item.isVeg
+                                              ? "bg-green-600"
+                                              : "bg-red-600"
                                           }`}
                                         />
                                       </span>
@@ -550,7 +748,9 @@ export default function TablePage() {
                                       </span>
                                     ))}
                                   </div>
-                                  <h4 className="mt-2 font-semibold leading-snug">{item.name}</h4>
+                                  <h4 className="mt-2 font-semibold leading-snug">
+                                    {item.name}
+                                  </h4>
                                   {item.description && (
                                     <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                                       {item.description}
@@ -565,8 +765,13 @@ export default function TablePage() {
                                         <button
                                           type="button"
                                           aria-label={`Remove one ${item.name}`}
-                                          disabled={busyItemId === item._id || !isOrderable}
-                                          onClick={() => void changeQuantity(item._id, -1)}
+                                          disabled={
+                                            busyItemId === item._id ||
+                                            !isOrderable
+                                          }
+                                          onClick={() =>
+                                            void changeQuantity(item._id, -1)
+                                          }
                                           className="grid size-7 place-items-center rounded-lg hover:bg-white/15 disabled:opacity-50"
                                         >
                                           <Minus className="size-4" />
@@ -577,8 +782,13 @@ export default function TablePage() {
                                         <button
                                           type="button"
                                           aria-label={`Add one ${item.name}`}
-                                          disabled={busyItemId === item._id || !isOrderable}
-                                          onClick={() => void changeQuantity(item._id, 1)}
+                                          disabled={
+                                            busyItemId === item._id ||
+                                            !isOrderable
+                                          }
+                                          onClick={() =>
+                                            void changeQuantity(item._id, 1)
+                                          }
                                           className="grid size-7 place-items-center rounded-lg hover:bg-white/15 disabled:opacity-50"
                                         >
                                           <Plus className="size-4" />
@@ -589,10 +799,17 @@ export default function TablePage() {
                                         size="sm"
                                         variant="outline"
                                         className="h-9 rounded-xl border-primary/30 px-4 text-primary hover:bg-primary hover:text-primary-foreground"
-                                        disabled={!isOrderable || busyItemId === item._id}
-                                        onClick={() => void changeQuantity(item._id, 1)}
+                                        disabled={
+                                          !isOrderable ||
+                                          busyItemId === item._id
+                                        }
+                                        onClick={() =>
+                                          void changeQuantity(item._id, 1)
+                                        }
                                       >
-                                        {busyItemId === item._id ? "Adding..." : "Add"}
+                                        {busyItemId === item._id
+                                          ? "Adding..."
+                                          : "Add"}
                                         <Plus className="ml-1 size-3.5" />
                                       </Button>
                                     )}
@@ -606,7 +823,8 @@ export default function TablePage() {
                                       loading="lazy"
                                       className="size-full object-cover"
                                       onError={(event) => {
-                                        event.currentTarget.style.display = "none";
+                                        event.currentTarget.style.display =
+                                          "none";
                                       }}
                                     />
                                   ) : (
@@ -628,7 +846,7 @@ export default function TablePage() {
           )}
         </section>
 
-        {hasOrders && sessionId && (
+        {hasOrders && activeSessionId && (
           <section className="mt-8 border-t pt-6">
             <Button
               variant="outline"
@@ -652,7 +870,9 @@ export default function TablePage() {
               <p className="text-xs text-muted-foreground">
                 {itemCount} {itemCount === 1 ? "item" : "items"} in your order
               </p>
-              <p className="truncate text-base font-bold">{formatPrice(subtotal, currency)}</p>
+              <p className="truncate text-base font-bold">
+                {formatPrice(subtotal, currency)}
+              </p>
             </div>
             <Button
               className="h-12 rounded-2xl px-5"
@@ -678,9 +898,14 @@ export default function TablePage() {
           </SheetHeader>
           <div className="space-y-3">
             {cartEntries.map((entry) => (
-              <div key={entry._id} className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3">
+              <div
+                key={entry._id}
+                className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3"
+              >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">{entry.menuItem!.name}</p>
+                  <p className="truncate text-sm font-semibold">
+                    {entry.menuItem!.name}
+                  </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {formatPrice(entry.menuItem!.price, currency)} each
                   </p>
@@ -695,7 +920,9 @@ export default function TablePage() {
                   >
                     <Minus className="size-4" />
                   </button>
-                  <span className="w-5 text-center text-sm font-semibold">{entry.quantity}</span>
+                  <span className="w-5 text-center text-sm font-semibold">
+                    {entry.quantity}
+                  </span>
                   <button
                     type="button"
                     aria-label={`Add one ${entry.menuItem!.name}`}
@@ -707,7 +934,10 @@ export default function TablePage() {
                   </button>
                 </div>
                 <span className="w-16 text-right text-sm font-semibold">
-                  {formatPrice(entry.menuItem!.price * entry.quantity, currency)}
+                  {formatPrice(
+                    entry.menuItem!.price * entry.quantity,
+                    currency,
+                  )}
                 </span>
               </div>
             ))}
@@ -721,7 +951,9 @@ export default function TablePage() {
                 className="mt-0.5 size-4 accent-primary"
               />
               <span className="text-sm">
-                <span className="block font-medium">Please bring drinking water</span>
+                <span className="block font-medium">
+                  Please bring drinking water
+                </span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
                   We’ll include this request with your order for the staff.
                 </span>
@@ -736,7 +968,9 @@ export default function TablePage() {
             </p>
             <Button
               className="mt-4 h-12 w-full rounded-2xl"
-              disabled={placingOrder || !isOrderable || cartEntries.length === 0}
+              disabled={
+                placingOrder || !isOrderable || cartEntries.length === 0
+              }
               onClick={() => void submitOrder()}
             >
               {placingOrder
@@ -752,7 +986,7 @@ export default function TablePage() {
         </SheetContent>
       </Sheet>
 
-      {sessionId && (
+      {activeSessionId && (
         <Sheet open={billOpen} onOpenChange={setBillOpen}>
           <SheetContent
             side="bottom"
@@ -761,10 +995,11 @@ export default function TablePage() {
             <SheetHeader className="px-0 pr-10">
               <SheetTitle>Bill and payment</SheetTitle>
               <SheetDescription>
-                Review your table total, request the bill, or pay online when available.
+                Review your table total, request the bill, or pay online when
+                available.
               </SheetDescription>
             </SheetHeader>
-            <CustomerBillPanel sessionId={sessionId} />
+            <CustomerBillPanel sessionId={activeSessionId} />
           </SheetContent>
         </Sheet>
       )}
