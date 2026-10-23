@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useRef, useState } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import {
   Authenticated,
   AuthLoading,
@@ -134,6 +135,39 @@ function StaffAlerts({
   return null;
 }
 
+class StaffAlertsBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Staff notifications could not be loaded.", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div
+          role="alert"
+          className="fixed bottom-4 right-4 z-[100] max-w-sm rounded-xl border border-destructive/30 bg-background p-4 text-sm shadow-lg"
+        >
+          <p className="font-semibold">Staff notifications unavailable</p>
+          <p className="mt-1 text-muted-foreground">
+            The backend needs to be updated before live customer alerts can
+            load. The rest of the restaurant workspace is still available.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ManagerGuard({ children }: { children: React.ReactNode }) {
   const user = useQuery(api.users.getCurrentUser, {});
   const navigate = useNavigate();
@@ -218,10 +252,12 @@ export default function ManagerLayout() {
         <ManagerGuard>
           <div className="flex h-screen overflow-hidden bg-background">
             {restaurantId && (
-              <StaffAlerts
-                restaurantId={restaurantId}
-                soundEnabled={soundEnabled}
-              />
+              <StaffAlertsBoundary key={restaurantId}>
+                <StaffAlerts
+                  restaurantId={restaurantId}
+                  soundEnabled={soundEnabled}
+                />
+              </StaffAlertsBoundary>
             )}
             <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
               <div className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-4">
