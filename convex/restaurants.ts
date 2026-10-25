@@ -1,6 +1,11 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { requireSuperAdmin, requireRestaurantAccess, generateRequestId } from "./lib/auth";
+import {
+  requireSuperAdmin,
+  requireRestaurantAccess,
+  requireRestaurantManager,
+  generateRequestId,
+} from "./lib/auth";
 
 const DEFAULT_FEATURES = [
   "shared_cart",
@@ -14,6 +19,9 @@ const DEFAULT_FEATURES = [
 export const create = mutation({
   args: {
     name: v.string(),
+    businessType: v.optional(
+      v.union(v.literal("RESTAURANT"), v.literal("CAFE")),
+    ),
     slug: v.string(),
     description: v.optional(v.string()),
     address: v.optional(v.string()),
@@ -37,6 +45,7 @@ export const create = mutation({
 
     const restaurantId = await ctx.db.insert("restaurants", {
       ...args,
+      businessType: args.businessType ?? "RESTAURANT",
       currency: args.currency ?? "INR",
       timezone: args.timezone ?? "Asia/Kolkata",
       isActive: true,
@@ -88,7 +97,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
     const { restaurantId, ...fields } = args;
-    await ctx.db.patch(restaurantId, {
+    await ctx.db.patch("restaurants", restaurantId, {
       ...fields,
       updatedAt: new Date().toISOString(),
     });
@@ -104,7 +113,10 @@ export const setActive = mutation({
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
     const now = new Date().toISOString();
-    await ctx.db.patch(args.restaurantId, { isActive: args.isActive, updatedAt: now });
+    await ctx.db.patch("restaurants", args.restaurantId, {
+      isActive: args.isActive,
+      updatedAt: now,
+    });
     await ctx.db.insert("auditLogs", {
       actorId: admin._id,
       actorRole: "SUPER_ADMIN",
@@ -131,6 +143,7 @@ export const listAll = query({
     createdAt: string;
     updatedAt: string;
     description?: string;
+    businessType?: "RESTAURANT" | "CAFE";
     address?: string;
     phone?: string;
     email?: string;
@@ -150,6 +163,43 @@ export const get = query({
   args: { restaurantId: v.id("restaurants") },
   handler: async (ctx, args) => {
     await requireRestaurantAccess(ctx, args.restaurantId);
-    return await ctx.db.get(args.restaurantId);
+    return await ctx.db.get("restaurants", args.restaurantId);
+  },
+});
+
+/** Manager: update customer-facing business name and brand assets. */
+export const updateSettings = mutation({
+  args: {
+    restaurantId: v.id("restaurants"),
+    name: v.optional(v.string()),
+    logoStorageId: v.optional(v.id("_storage")),
+    paymentQrStorageId: v.optional(v.id("_storage")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRestaurantManager(ctx, args.restaurantId);
+    const { restaurantId, ...fields } = args;
+    const current = await ctx.db.get("restaurants", restaurantId);
+    if (!current) throw new Error("Business not found");
+    if (fields.logoStorageId && current.logoStorageId) {
+      await ctx.storage.delete(current.logoStorageId);
+    }
+    if (fields.paymentQrStorageId && current.paymentQrStorageId) {
+      await ctx.storage.delete(current.paymentQrStorageId);
+    }
+    await ctx.db.patch("restaurants", restaurantId, {
+      ...fields,
+      updatedAt: new Date().toISOString(),
+    });
+    return null;
+  },
+});
+
+export const generateBrandAssetUploadUrl = mutation({
+  args: { restaurantId: v.id("restaurants") },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    await requireRestaurantManager(ctx, args.restaurantId);
+    return await ctx.storage.generateUploadUrl();
   },
 });

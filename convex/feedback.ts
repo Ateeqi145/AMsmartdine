@@ -1,6 +1,46 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { recordCustomerAction } from "./lib/staffNotifications";
+import { requireRestaurantAccess } from "./lib/auth";
+
+export const listForRestaurant = query({
+  args: { restaurantId: v.id("restaurants") },
+  returns: v.array(
+    v.object({
+      _id: v.id("feedback"),
+      _creationTime: v.number(),
+      restaurantId: v.id("restaurants"),
+      sessionId: v.id("sessions"),
+      rating: v.number(),
+      comment: v.optional(v.string()),
+      tags: v.optional(v.array(v.string())),
+      submittedAt: v.string(),
+      tableDisplayName: v.string(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireRestaurantAccess(ctx, args.restaurantId);
+    const feedback = await ctx.db
+      .query("feedback")
+      .withIndex("by_restaurant", (q) =>
+        q.eq("restaurantId", args.restaurantId),
+      )
+      .order("desc")
+      .take(200);
+    return await Promise.all(
+      feedback.map(async (entry) => {
+        const session = await ctx.db.get("sessions", entry.sessionId);
+        const table = session
+          ? await ctx.db.get("tables", session.tableId)
+          : null;
+        return {
+          ...entry,
+          tableDisplayName: table?.displayName ?? table?.tableNumber ?? "Table",
+        };
+      }),
+    );
+  },
+});
 
 export const hasSubmitted = query({
   args: { sessionId: v.id("sessions") },

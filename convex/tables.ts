@@ -30,8 +30,39 @@ export const getByQrToken = query({
       .withIndex("by_qr_token", (q) => q.eq("qrCodeToken", args.qrCodeToken))
       .unique();
     if (!table) return null;
-    const restaurant = await ctx.db.get(table.restaurantId);
-    return { table, restaurant };
+    const restaurant = await ctx.db.get("restaurants", table.restaurantId);
+    if (!restaurant) return { table, restaurant: null };
+    const [logoUrl, categories, items] = await Promise.all([
+      restaurant.logoStorageId
+        ? ctx.storage.getUrl(restaurant.logoStorageId)
+        : Promise.resolve(restaurant.logoUrl),
+      ctx.db
+        .query("menuCategories")
+        .withIndex("by_restaurant_sort", (q) =>
+          q.eq("restaurantId", restaurant._id),
+        )
+        .take(100),
+      ctx.db
+        .query("menuItems")
+        .withIndex("by_restaurant_available", (q) =>
+          q.eq("restaurantId", restaurant._id).eq("isAvailable", true),
+        )
+        .take(500),
+    ]);
+    const menuItems = await Promise.all(
+      items.map(async (item) => ({
+        ...item,
+        imageUrl: item.imageStorageId
+          ? (await ctx.storage.getUrl(item.imageStorageId)) ?? undefined
+          : item.imageUrl,
+      })),
+    );
+    return {
+      table,
+      restaurant: { ...restaurant, logoUrl: logoUrl ?? undefined },
+      categories,
+      menuItems,
+    };
   },
 });
 
@@ -80,7 +111,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireRestaurantManager(ctx, args.restaurantId);
     const { tableId, restaurantId: _rid, ...fields } = args;
-    await ctx.db.patch(tableId, fields);
+    await ctx.db.patch("tables", tableId, fields);
   },
 });
 
@@ -92,10 +123,10 @@ export const regenerateQr = mutation({
   },
   handler: async (ctx, args) => {
     await requireRestaurantManager(ctx, args.restaurantId);
-    const table = await ctx.db.get(args.tableId);
+    const table = await ctx.db.get("tables", args.tableId);
     if (!table) throw new Error("Table not found");
     const newToken = generateQrToken(args.restaurantId, table.tableNumber);
-    await ctx.db.patch(args.tableId, { qrCodeToken: newToken });
+    await ctx.db.patch("tables", args.tableId, { qrCodeToken: newToken });
     return newToken;
   },
 });
@@ -116,6 +147,6 @@ export const remove = mutation({
       )
       .first();
     if (activeSession) throw new Error("Cannot delete a table with an active session");
-    await ctx.db.delete(args.tableId);
+    await ctx.db.delete("tables", args.tableId);
   },
 });

@@ -43,7 +43,6 @@ const navItems = [
     managerOnly: true,
   },
   { to: "/restaurant/orders", label: "Orders", icon: ClipboardList },
-  { to: "/restaurant/billing", label: "Billing", icon: ClipboardList },
   {
     to: "/restaurant/reports",
     label: "Reports",
@@ -53,27 +52,43 @@ const navItems = [
   { to: "/restaurant/settings", label: "Settings", icon: Settings },
 ];
 
-function playOrderAlert(context: AudioContext | null) {
+type AlertSound = "chime" | "bell" | "pulse";
+
+function playOrderAlert(
+  context: AudioContext | null,
+  sound: AlertSound = "chime",
+) {
   if (!context || context.state !== "running") return;
   const oscillator = context.createOscillator();
   const gain = context.createGain();
-  oscillator.type = "sine";
-  oscillator.frequency.value = 880;
+  oscillator.type =
+    sound === "bell" ? "triangle" : sound === "pulse" ? "square" : "sine";
+  oscillator.frequency.value =
+    sound === "bell" ? 660 : sound === "pulse" ? 440 : 880;
+  const duration = sound === "pulse" ? 0.2 : sound === "bell" ? 0.65 : 0.45;
   gain.gain.setValueAtTime(0.0001, context.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.45);
+  gain.gain.exponentialRampToValueAtTime(
+    sound === "pulse" ? 0.09 : 0.12,
+    context.currentTime + 0.02,
+  );
+  gain.gain.exponentialRampToValueAtTime(
+    0.0001,
+    context.currentTime + duration,
+  );
   oscillator.connect(gain);
   gain.connect(context.destination);
   oscillator.start();
-  oscillator.stop(context.currentTime + 0.46);
+  oscillator.stop(context.currentTime + duration + 0.01);
 }
 
 function StaffAlerts({
   restaurantId,
   soundEnabled,
+  soundTone,
 }: {
   restaurantId: Id<"restaurants">;
   soundEnabled: boolean;
+  soundTone: AlertSound;
 }) {
   const notifications = useQuery(api.waiterRequests.listRecentCustomerActions, {
     restaurantId,
@@ -104,6 +119,21 @@ function StaffAlerts({
   }, []);
 
   useEffect(() => {
+    const previewSound = (event: Event) => {
+      const sound = (event as CustomEvent<AlertSound>).detail;
+      if (sound === "chime" || sound === "bell" || sound === "pulse") {
+        playOrderAlert(audioContext.current, sound);
+      }
+    };
+    window.addEventListener("smartdine:order-sound-preview", previewSound);
+    return () =>
+      window.removeEventListener(
+        "smartdine:order-sound-preview",
+        previewSound,
+      );
+  }, []);
+
+  useEffect(() => {
     if (!notifications) return;
     if (!initialized.current) {
       for (const notification of notifications)
@@ -119,7 +149,7 @@ function StaffAlerts({
     for (const notification of fresh) {
       seen.current.add(notification._id);
       if (notification.eventType === "ORDER_PLACED" && soundEnabled) {
-        playOrderAlert(audioContext.current);
+        playOrderAlert(audioContext.current, soundTone);
       }
       toast(notification.message, {
         description: `${notification.tableDisplayName} · ${new Date(notification.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
@@ -130,7 +160,7 @@ function StaffAlerts({
         },
       });
     }
-  }, [navigate, notifications, soundEnabled]);
+  }, [navigate, notifications, soundEnabled, soundTone]);
 
   return null;
 }
@@ -224,6 +254,10 @@ export default function ManagerLayout() {
   const [soundEnabled, setSoundEnabled] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
   );
+  const [soundTone, setSoundTone] = useState<AlertSound>(() => {
+    const tone = window.localStorage.getItem("smartdine-order-sound-tone");
+    return tone === "bell" || tone === "pulse" ? tone : "chime";
+  });
 
   useEffect(() => {
     const updateSound = (event: Event) => {
@@ -233,6 +267,18 @@ export default function ManagerLayout() {
     window.addEventListener("smartdine:order-sound", updateSound);
     return () =>
       window.removeEventListener("smartdine:order-sound", updateSound);
+  }, []);
+
+  useEffect(() => {
+    const updateTone = (event: Event) => {
+      const tone = (event as CustomEvent<AlertSound>).detail;
+      if (tone === "chime" || tone === "bell" || tone === "pulse") {
+        setSoundTone(tone);
+      }
+    };
+    window.addEventListener("smartdine:order-sound-tone", updateTone);
+    return () =>
+      window.removeEventListener("smartdine:order-sound-tone", updateTone);
   }, []);
 
   const visibleNav = navItems.filter((item) => !item.managerOnly || isManager);
@@ -256,16 +302,33 @@ export default function ManagerLayout() {
                 <StaffAlerts
                   restaurantId={restaurantId}
                   soundEnabled={soundEnabled}
+                  soundTone={soundTone}
                 />
               </StaffAlertsBoundary>
             )}
             <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
               <div className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-4">
-                <UtensilsCrossed className="h-5 w-5 text-primary" />
+                {restaurant?.logoUrl ? (
+                  <img
+                    src={restaurant.logoUrl}
+                    alt=""
+                    className="size-8 shrink-0 rounded-lg object-cover"
+                  />
+                ) : (
+                  <UtensilsCrossed className="h-5 w-5 text-primary" />
+                )}
                 <div>
-                  <p className="text-sm font-bold">SmartDine</p>
+                  <p className="max-w-40 truncate text-sm font-bold">
+                    {restaurant?.name ?? "SmartDine"}
+                  </p>
                   <p className="text-[9px] font-semibold uppercase text-primary">
-                    {isManager ? "Restaurant Manager" : "Restaurant Staff"}
+                    {restaurant?.businessType === "CAFE"
+                      ? isManager
+                        ? "Cafe Manager"
+                        : "Cafe Staff"
+                      : isManager
+                        ? "Restaurant Manager"
+                        : "Restaurant Staff"}
                   </p>
                 </div>
               </div>
@@ -297,9 +360,19 @@ export default function ManagerLayout() {
             </aside>
             <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
               <header className="sticky top-0 z-30 flex h-14 items-center justify-end gap-2 border-b bg-background/90 px-4 backdrop-blur">
-                <span className="mr-auto text-sm font-medium text-muted-foreground">
-                  {isManager ? "Manager workspace" : "Staff workspace"}
-                </span>
+                <div className="mr-auto flex min-w-0 items-center gap-2">
+                  {restaurant?.logoUrl && (
+                    <img
+                      src={restaurant.logoUrl}
+                      alt=""
+                      className="size-8 shrink-0 rounded-lg object-cover"
+                    />
+                  )}
+                  <span className="truncate text-sm font-medium">
+                    {restaurant?.name ??
+                      (isManager ? "Manager workspace" : "Staff workspace")}
+                  </span>
+                </div>
                 <Button
                   type="button"
                   size="icon"

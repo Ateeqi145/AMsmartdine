@@ -9,7 +9,6 @@ export const placeOrder = mutation({
   args: {
     sessionId: v.id("sessions"),
     customerId: v.string(),
-    waterRequested: v.optional(v.boolean()),
   },
   returns: v.id("orders"),
   handler: async (ctx, args) => {
@@ -92,25 +91,6 @@ export const placeOrder = mutation({
     // Clear cart after placing order
     for (const item of cartItems) {
       await ctx.db.delete("cartItems", item._id);
-    }
-
-    if (args.waterRequested) {
-      await ctx.db.insert("waiterRequests", {
-        restaurantId: session.restaurantId,
-        sessionId: args.sessionId,
-        tableId: session.tableId,
-        requestType: "WATER",
-        message: "Customer requested drinking water with this order.",
-        status: "PENDING",
-        requestedAt: now,
-      });
-      await recordCustomerAction(ctx, {
-        restaurantId: session.restaurantId,
-        sessionId: args.sessionId,
-        tableId: session.tableId,
-        eventType: "WATER_REQUESTED",
-        message: "Customer requested drinking water.",
-      });
     }
 
     // Update session totalAmount
@@ -258,10 +238,14 @@ export const listActiveForRestaurant = query({
 
     return await Promise.all(
       orders.map(async (order) => {
-        const table = await ctx.db.get("tables", order.tableId);
+        const [table, session] = await Promise.all([
+          ctx.db.get("tables", order.tableId),
+          ctx.db.get("sessions", order.sessionId),
+        ]);
         return {
           ...order,
           tableDisplayName: table?.displayName ?? table?.tableNumber ?? "Table",
+          sessionStatus: session?.status ?? "CLOSED",
         };
       }),
     );

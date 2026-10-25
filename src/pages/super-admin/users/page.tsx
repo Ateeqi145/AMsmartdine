@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { toast } from "sonner";
+import { getUserFacingErrorMessage } from "@/lib/error-catalog";
 import { Users, ShieldCheck, ShieldAlert, Shield, Search } from "lucide-react";
 
 const ROLE_META: Record<
@@ -96,9 +97,7 @@ function AssignRoleDialog({
       toast.success("Role assigned successfully");
       onClose();
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to assign role",
-      );
+      toast.error(getUserFacingErrorMessage(error, "Failed to assign role"));
     } finally {
       setLoading(false);
     }

@@ -21,6 +21,7 @@ function CreateRestaurantDialog({
 }) {
   const create = useMutation(api.restaurants.create);
   const [form, setForm] = useState({
+    businessType: "RESTAURANT" as "RESTAURANT" | "CAFE",
     name: "",
     slug: "",
     description: "",
@@ -39,9 +40,19 @@ function CreateRestaurantDialog({
     setLoading(true);
     try {
       await create(form);
-      toast.success("Restaurant created successfully");
+      toast.success(
+        `${form.businessType === "CAFE" ? "Cafe" : "Restaurant"} created successfully`,
+      );
       onClose();
-      setForm({ name: "", slug: "", description: "", address: "", phone: "", email: "" });
+      setForm({
+        businessType: "RESTAURANT",
+        name: "",
+        slug: "",
+        description: "",
+        address: "",
+        phone: "",
+        email: "",
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create restaurant");
     } finally {
@@ -56,11 +67,29 @@ function CreateRestaurantDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Create Restaurant</DialogTitle>
+          <DialogTitle>Create a business</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label>Restaurant Name *</Label>
+            <Label>Business type</Label>
+            <select
+              value={form.businessType}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  businessType: event.target.value as
+                    | "RESTAURANT"
+                    | "CAFE",
+                }))
+              }
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            >
+              <option value="RESTAURANT">Restaurant</option>
+              <option value="CAFE">Cafe</option>
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>{form.businessType === "CAFE" ? "Cafe" : "Restaurant"} name *</Label>
             <Input
               placeholder="The Grand Kitchen"
               value={form.name}
@@ -142,12 +171,12 @@ export default function SuperAdminRestaurants() {
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Restaurants</h1>
-          <p className="text-muted-foreground mt-1">Manage all restaurants on the platform</p>
+          <h1 className="text-2xl font-bold tracking-tight">Businesses</h1>
+          <p className="text-muted-foreground mt-1">Manage cafes and restaurants on the platform</p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-2">
           <Plus className="w-4 h-4" />
-          New Restaurant
+          New Business
         </Button>
       </div>
 
@@ -159,11 +188,11 @@ export default function SuperAdminRestaurants() {
         <Card>
           <CardContent className="py-16 text-center">
             <Store className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-            <p className="font-medium">No restaurants yet</p>
-            <p className="text-sm text-muted-foreground mt-1">Create your first restaurant to get started</p>
+            <p className="font-medium">No businesses yet</p>
+            <p className="text-sm text-muted-foreground mt-1">Create your first cafe or restaurant to get started</p>
             <Button className="mt-4 gap-2" onClick={() => setCreateOpen(true)}>
               <Plus className="w-4 h-4" />
-              Create Restaurant
+              Create Business
             </Button>
           </CardContent>
         </Card>
@@ -179,6 +208,9 @@ export default function SuperAdminRestaurants() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="font-semibold truncate">{r.name}</p>
+                      <Badge variant="outline" className="text-xs">
+                        {r.businessType === "CAFE" ? "Cafe" : "Restaurant"}
+                      </Badge>
                       <Badge variant={r.isActive ? "default" : "secondary"} className="text-xs">
                         {r.isActive ? "Active" : "Inactive"}
                       </Badge>

@@ -53,8 +53,9 @@ export async function assertRoleSlotAvailable(
       )
     ) {
       throw new ConvexError({
-        message: "Only one active Manager is allowed per restaurant",
-        code: "BAD_REQUEST",
+        message:
+          "This restaurant already has an active manager. Each restaurant can have only one manager. Reassign or deactivate the current manager before assigning another.",
+        code: "MANAGER_ALREADY_ASSIGNED",
       });
     }
   }

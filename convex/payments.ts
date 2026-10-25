@@ -228,7 +228,9 @@ export const getBillSummary = query({
   ): Promise<{
     session: Doc<"sessions">;
     table: Doc<"tables"> | null;
-    restaurant: Doc<"restaurants"> | null;
+    restaurant:
+      | (Doc<"restaurants"> & { paymentQrUrl?: string | undefined })
+      | null;
     orders: Doc<"orders">[];
     payments: Doc<"payments">[];
     orderTotal: number;
@@ -244,7 +246,7 @@ export const getBillSummary = query({
         code: "NOT_FOUND",
       });
 
-    const [table, restaurant, allOrders, allPayments, waiterRequests] =
+    const [table, restaurantRecord, allOrders, allPayments, waiterRequests] =
       await Promise.all([
         ctx.db.get("tables", session.tableId),
         ctx.db.get("restaurants", session.restaurantId),
@@ -261,6 +263,19 @@ export const getBillSummary = query({
           .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
           .collect(),
       ]);
+    const restaurant = restaurantRecord
+      ? {
+          ...restaurantRecord,
+          logoUrl: restaurantRecord.logoStorageId
+            ? (await ctx.storage.getUrl(restaurantRecord.logoStorageId)) ??
+              undefined
+            : restaurantRecord.logoUrl,
+          paymentQrUrl: restaurantRecord.paymentQrStorageId
+            ? (await ctx.storage.getUrl(restaurantRecord.paymentQrStorageId)) ??
+              undefined
+            : undefined,
+        }
+      : null;
 
     const activeOrders = allOrders.filter((o) => o.status !== "CANCELLED");
     const orderTotal = activeOrders.reduce((sum, o) => sum + o.total, 0);

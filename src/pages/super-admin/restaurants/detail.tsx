@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input.tsx";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
 import { toast } from "sonner";
+import { getUserFacingErrorMessage } from "@/lib/error-catalog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import {
   ArrowLeft, Store, Users, Settings, ToggleLeft, Pencil,
@@ -140,8 +141,8 @@ function AssignStaffDialog({
       toast.success("Staff assigned successfully");
       onClose();
       setSelectedUser("");
-    } catch {
-      toast.error("Failed to assign staff");
+    } catch (error) {
+      toast.error(getUserFacingErrorMessage(error, "Failed to assign staff"));
     } finally {
       setLoading(false);
     }

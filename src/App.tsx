@@ -50,9 +50,6 @@ const ManagerOrdersPage = lazy(() => import("./pages/manager/orders/page.tsx"));
 const ManagerReportsPage = lazy(
   () => import("./pages/manager/reports/page.tsx"),
 );
-const ManagerBillingPage = lazy(
-  () => import("./pages/manager/billing/page.tsx"),
-);
 const ManagerSettingsPage = lazy(
   () => import("./pages/manager/settings/page.tsx"),
 );
@@ -117,7 +114,10 @@ export default function App() {
               <Route path="tables" element={<ManagerTablesPage />} />
               <Route path="menu" element={<ManagerMenuPage />} />
               <Route path="orders" element={<ManagerOrdersPage />} />
-              <Route path="billing" element={<ManagerBillingPage />} />
+              <Route
+                path="billing"
+                element={<Navigate to="/restaurant/orders" replace />}
+              />
               <Route path="reports" element={<ManagerReportsPage />} />
               <Route path="settings" element={<ManagerSettingsPage />} />
             </Route>

@@ -20,7 +20,19 @@ export const getCurrentUserRestaurant = query({
     const userId = await getAuthUserId(ctx);
     const user = userId ? await ctx.db.get("users", userId) : null;
     if (!user?.restaurantId) return null;
-    return await ctx.db.get("restaurants", user.restaurantId);
+    const restaurant = await ctx.db.get("restaurants", user.restaurantId);
+    if (!restaurant) return null;
+    const logoUrl = restaurant.logoStorageId
+      ? await ctx.storage.getUrl(restaurant.logoStorageId)
+      : restaurant.logoUrl;
+    const paymentQrUrl = restaurant.paymentQrStorageId
+      ? await ctx.storage.getUrl(restaurant.paymentQrStorageId)
+      : undefined;
+    return {
+      ...restaurant,
+      logoUrl: logoUrl ?? undefined,
+      paymentQrUrl: paymentQrUrl ?? undefined,
+    };
   },
 });
 

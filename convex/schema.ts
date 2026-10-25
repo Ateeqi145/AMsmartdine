@@ -74,9 +74,14 @@ export default defineSchema({
   // ── Restaurants ───────────────────────────────────────────────────
   restaurants: defineTable({
     name: v.string(),
+    businessType: v.optional(
+      v.union(v.literal("RESTAURANT"), v.literal("CAFE")),
+    ),
     slug: v.string(), // url-friendly unique identifier
     description: v.optional(v.string()),
     logoUrl: v.optional(v.string()),
+    logoStorageId: v.optional(v.id("_storage")),
+    paymentQrStorageId: v.optional(v.id("_storage")),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
     email: v.optional(v.string()),

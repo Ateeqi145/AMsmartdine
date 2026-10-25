@@ -4,7 +4,6 @@ import { useParams } from "react-router-dom";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
-  BellRing,
   Ban,
   Check,
   ChefHat,
@@ -81,10 +80,6 @@ export default function TablePage() {
     api.tables.getByQrToken,
     qrToken ? { qrCodeToken: qrToken } : "skip",
   );
-  const flags = useQuery(
-    api.featureFlags.listPublic,
-    tableInfo?.restaurant ? { restaurantId: tableInfo.restaurant._id } : "skip",
-  );
   const openOrJoinSession = useMutation(api.sessions.openOrJoinSession);
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(() =>
     getSavedSessionId(qrToken),
@@ -107,10 +102,8 @@ export default function TablePage() {
   const [search, setSearch] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
   const [billOpen, setBillOpen] = useState(false);
-  const [waterRequested, setWaterRequested] = useState(false);
   const [busyItemId, setBusyItemId] = useState<Id<"menuItems"> | null>(null);
   const [placingOrder, setPlacingOrder] = useState(false);
-  const [callingWaiter, setCallingWaiter] = useState(false);
   const [placedOrderId, setPlacedOrderId] = useState<Id<"orders"> | null>(null);
   const [cancellingOrderId, setCancellingOrderId] =
     useState<Id<"orders"> | null>(null);
@@ -170,14 +163,8 @@ export default function TablePage() {
     tableInfo,
   ]);
 
-  const menuCategories = useQuery(
-    api.menu.listCategoriesPublic,
-    tableInfo?.restaurant ? { restaurantId: tableInfo.restaurant._id } : "skip",
-  );
-  const menuItems = useQuery(
-    api.menu.listItemsPublic,
-    tableInfo?.restaurant ? { restaurantId: tableInfo.restaurant._id } : "skip",
-  );
+  const menuCategories = tableInfo?.categories;
+  const menuItems = tableInfo?.menuItems;
   const cart = useQuery(
     api.cart.getCart,
     activeSessionId ? { sessionId: activeSessionId, customerId } : "skip",
@@ -190,7 +177,6 @@ export default function TablePage() {
   const updateCartItem = useMutation(api.cart.updateCartItem);
   const placeOrder = useMutation(api.orders.placeOrder);
   const cancelOrder = useMutation(api.orders.cancelOrder);
-  const createWaiterRequest = useMutation(api.waiterRequests.create);
 
   const activeCategories = useMemo(
     () =>
@@ -217,8 +203,6 @@ export default function TablePage() {
   );
   const currency = tableInfo?.restaurant?.currency ?? "INR";
   const isOrderable = session?.session.status === "ACTIVE";
-  const waiterEnabled =
-    flags?.find((flag) => flag.key === "call_waiter")?.enabled ?? false;
   const hasOrders = (orders?.length ?? 0) > 0;
 
   const visibleCategories = activeCategories.filter((category) => {
@@ -297,10 +281,8 @@ export default function TablePage() {
       const orderId = await placeOrder({
         sessionId: activeSessionId,
         customerId,
-        waterRequested,
       });
       setPlacedOrderId(orderId);
-      setWaterRequested(false);
       setCartOpen(false);
       toast.success("Order sent to the kitchen");
     } catch (error) {
@@ -309,32 +291,6 @@ export default function TablePage() {
       );
     } finally {
       setPlacingOrder(false);
-    }
-  };
-
-  const callWaiter = async () => {
-    if (
-      !activeSessionId ||
-      !tableInfo?.table ||
-      !tableInfo.restaurant ||
-      callingWaiter
-    )
-      return;
-    setCallingWaiter(true);
-    try {
-      await createWaiterRequest({
-        sessionId: activeSessionId,
-        restaurantId: tableInfo.restaurant._id,
-        tableId: tableInfo.table._id,
-        type: "CALL",
-      });
-      toast.success("A waiter has been notified");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not call a waiter.",
-      );
-    } finally {
-      setCallingWaiter(false);
     }
   };
 
@@ -370,6 +326,41 @@ export default function TablePage() {
 
   const { table, restaurant } = tableInfo;
   const tableName = table.displayName ?? `Table ${table.tableNumber}`;
+  const isOccupied = sessionError?.toLowerCase().includes("occupied") ?? false;
+
+  if (isOccupied) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/30 px-6">
+        <section className="w-full max-w-sm rounded-2xl border bg-background p-6 text-center">
+          {restaurant.logoUrl ? (
+            <img
+              src={restaurant.logoUrl}
+              alt=""
+              className="mx-auto mb-4 size-14 rounded-xl object-cover"
+            />
+          ) : (
+            <UtensilsCrossed className="mx-auto mb-4 size-8 text-primary" />
+          )}
+          <p className="text-sm font-semibold">{restaurant.name}</p>
+          <h1 className="mt-2 text-xl font-bold">This table is occupied</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {tableName} already has an active customer session. Please wait for
+            that visit to finish or ask a staff member for help.
+          </p>
+          <Button
+            variant="outline"
+            className="mt-5 w-full"
+            onClick={() => {
+              setSessionError(null);
+              setSessionRetry((attempt) => attempt + 1);
+            }}
+          >
+            Check again
+          </Button>
+        </section>
+      </main>
+    );
+  }
 
   if (session?.session.status === "CLOSED" && activeSessionId) {
     return (
@@ -428,20 +419,6 @@ export default function TablePage() {
               <p className="text-xs text-muted-foreground">{tableName}</p>
             </div>
           </div>
-          {waiterEnabled && activeSessionId && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="shrink-0 gap-2 rounded-full"
-              disabled={callingWaiter || !isOrderable}
-              onClick={callWaiter}
-            >
-              <BellRing className="size-4" />
-              <span className="hidden sm:inline">
-                {callingWaiter ? "Calling..." : "Waiter"}
-              </span>
-            </Button>
-          )}
           <ThemeToggle />
         </div>
       </header>
@@ -575,8 +552,13 @@ export default function TablePage() {
                         : "Cancel order"}
                     </Button>
                   )}
-                {(order.status === "PREPARING" ||
-                  order.status === "CONFIRMED") && (
+                {order.status === "CONFIRMED" && (
+                  <p className="mt-3 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <Clock3 className="size-4 text-primary" />
+                    Order accepted. Please wait until your order is ready.
+                  </p>
+                )}
+                {order.status === "PREPARING" && (
                   <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                     <ChefHat className="size-4 text-primary" />
                     The kitchen is working on your order.
@@ -585,7 +567,7 @@ export default function TablePage() {
                 {order.status === "READY" && (
                   <p className="mt-3 flex items-center gap-2 text-xs font-medium text-primary">
                     <Check className="size-4" />
-                    Your order is ready.
+                    Your order is ready. Please collect it from the counter.
                   </p>
                 )}
               </article>
@@ -943,22 +925,6 @@ export default function TablePage() {
             ))}
           </div>
           <div className="mt-5 border-t pt-4">
-            <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border bg-background p-3">
-              <input
-                type="checkbox"
-                checked={waterRequested}
-                onChange={(event) => setWaterRequested(event.target.checked)}
-                className="mt-0.5 size-4 accent-primary"
-              />
-              <span className="text-sm">
-                <span className="block font-medium">
-                  Please bring drinking water
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  We’ll include this request with your order for the staff.
-                </span>
-              </span>
-            </label>
             <div className="flex items-center justify-between text-base font-bold">
               <span>Subtotal</span>
               <span>{formatPrice(subtotal, currency)}</span>
@@ -995,8 +961,7 @@ export default function TablePage() {
             <SheetHeader className="px-0 pr-10">
               <SheetTitle>Bill and payment</SheetTitle>
               <SheetDescription>
-                Review your table total, request the bill, or pay online when
-                available.
+                Review your order total and scan the UPI payment QR code.
               </SheetDescription>
             </SheetHeader>
             <CustomerBillPanel sessionId={activeSessionId} />

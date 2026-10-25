@@ -1,90 +1,11 @@
-import { useState, useEffect } from "react";
-import { useQuery, useAction, useMutation } from "convex/react";
+import { useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { CheckCircle2, Star } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/convex/_generated/api.js";
 import type { Id } from "@/convex/_generated/dataModel";
-import { motion, AnimatePresence } from "motion/react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button.tsx";
-import { Badge } from "@/components/ui/badge.tsx";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog.tsx";
-import { Input } from "@/components/ui/input.tsx";
-import { Label } from "@/components/ui/label.tsx";
-import {
-  Receipt,
-  CreditCard,
-  Banknote,
-  Smartphone,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  ChevronDown,
-  ChevronUp,
-  Star,
-} from "lucide-react";
-
-type PaymentMethod = "UPI" | "CARD" | "CASH";
-
-interface RazorpayInstance {
-  open: () => void;
-  on: (event: string, handler: () => void) => void;
-}
-
-declare global {
-  interface Window {
-    Razorpay?: new (opts: Record<string, unknown>) => RazorpayInstance;
-  }
-}
-
-// Load Razorpay JS SDK lazily
-function loadRazorpayScript(): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (window.Razorpay) {
-      resolve(true);
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.body.appendChild(script);
-  });
-}
-
-// ─── Payment method selector ──────────────────────────────────────
-function MethodButton({
-  method,
-  label,
-  icon: Icon,
-  selected,
-  onClick,
-}: {
-  method: PaymentMethod;
-  label: string;
-  icon: React.ElementType;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex-1 flex flex-col items-center gap-1.5 p-3 rounded-xl border-2 transition-all cursor-pointer ${
-        selected
-          ? "border-primary bg-primary/5 text-primary"
-          : "border-border text-muted-foreground hover:border-muted-foreground"
-      }`}
-    >
-      <Icon className="w-5 h-5" />
-      <span className="text-xs font-semibold">{label}</span>
-    </button>
-  );
-}
 
 function CustomerFeedbackForm({ sessionId }: { sessionId: Id<"sessions"> }) {
   const hasSubmitted = useQuery(api.feedback.hasSubmitted, { sessionId });
@@ -118,7 +39,6 @@ function CustomerFeedbackForm({ sessionId }: { sessionId: Id<"sessions"> }) {
   if (hasSubmitted === undefined) {
     return <Skeleton className="h-28 w-full rounded-2xl" />;
   }
-
   if (hasSubmitted) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-green-200 bg-green-50 p-4 dark:border-green-900 dark:bg-green-900/10">
@@ -132,7 +52,6 @@ function CustomerFeedbackForm({ sessionId }: { sessionId: Id<"sessions"> }) {
       </div>
     );
   }
-
   return (
     <section className="rounded-2xl border bg-card p-4">
       <h3 className="font-bold">How was your experience?</h3>
@@ -178,430 +97,80 @@ function CustomerFeedbackForm({ sessionId }: { sessionId: Id<"sessions"> }) {
   );
 }
 
-// ─── Customer Bill Panel ──────────────────────────────────────────
 export function CustomerBillPanel({
   sessionId,
-  onBillRequested,
 }: {
   sessionId: Id<"sessions">;
-  onBillRequested?: () => void;
 }) {
   const bill = useQuery(api.payments.getBillSummary, { sessionId });
-  const requestBill = useMutation(api.payments.customerRequestBill);
-  const requestCashPayment = useMutation(
-    api.payments.customerRequestCashPayment,
-  );
-  const initiatePayment = useAction(api.payments.initiateOnlinePayment);
-  const confirmPayment = useAction(api.payments.confirmOnlinePayment);
-
-  const [method, setMethod] = useState<PaymentMethod>("UPI");
-  const [paying, setPaying] = useState(false);
-  const [requestingBill, setRequestingBill] = useState(false);
-  const [requestingCash, setRequestingCash] = useState(false);
-  const [showOrders, setShowOrders] = useState(false);
-  const [partialAmount, setPartialAmount] = useState("");
-  const [usePartial, setUsePartial] = useState(false);
-
-  // Check partial_payment flag
-  const flags = useQuery(
-    api.featureFlags.listPublic,
-    bill ? { restaurantId: bill.restaurant!._id } : "skip",
-  );
-  const partialEnabled =
-    flags?.find((f) => f.key === "partial_payment")?.enabled ?? false;
-  const onlineEnabled =
-    flags?.find((f) => f.key === "online_payment")?.enabled ?? true;
-  const feedbackEnabled =
-    flags?.find((f) => f.key === "feedback")?.enabled ?? true;
-
   if (!bill) {
     return (
       <div className="space-y-3 p-4">
-        {[...Array(4)].map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full rounded-xl" />
+        {[0, 1, 2].map((item) => (
+          <Skeleton key={item} className="h-12 w-full rounded-xl" />
         ))}
       </div>
     );
   }
 
-  const { session, orders, payments, orderTotal, paidAmount, remaining } = bill;
+  const { session, restaurant, orders, orderTotal } = bill;
   const isClosed = session.status === "CLOSED";
-  const isBilling = session.status === "BILLING";
-
-  const payAmount =
-    usePartial && partialAmount
-      ? Math.round(parseFloat(partialAmount) * 100)
-      : remaining;
-
-  const handleRequestBill = async () => {
-    setRequestingBill(true);
-    try {
-      await requestBill({ sessionId });
-      toast.success("Bill requested — waiter has been notified");
-      onBillRequested?.();
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to request bill",
-      );
-    } finally {
-      setRequestingBill(false);
-    }
-  };
-
-  const handleOnlinePayment = async () => {
-    if (method === "CASH") return;
-    if (payAmount <= 0) {
-      toast.error("Invalid amount");
-      return;
-    }
-    setPaying(true);
-    try {
-      const loaded = await loadRazorpayScript();
-      if (!loaded || !window.Razorpay) {
-        toast.error("Could not load payment gateway. Please try again.");
-        return;
-      }
-
-      const result = await initiatePayment({
-        sessionId,
-        amountPaise: payAmount,
-        method,
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        const rzp = new window.Razorpay!({
-          key: result.keyId,
-          amount: result.amount,
-          currency: result.currency,
-          order_id: result.razorpayOrderId,
-          name: bill.restaurant?.name ?? "SmartDine",
-          description: `Table ${bill.table?.displayName ?? bill.table?.tableNumber}`,
-          theme: { color: "#e07e2c" },
-          handler: async (response: {
-            razorpay_order_id: string;
-            razorpay_payment_id: string;
-            razorpay_signature: string;
-          }) => {
-            try {
-              await confirmPayment({
-                paymentId: result.paymentId as Id<"payments">,
-                razorpayOrderId: response.razorpay_order_id,
-                razorpayPaymentId: response.razorpay_payment_id,
-                razorpaySignature: response.razorpay_signature,
-                method,
-              });
-              toast.success("Payment successful!");
-              resolve();
-            } catch (e) {
-              reject(e);
-            }
-          },
-          modal: { ondismiss: () => reject(new Error("Payment cancelled")) },
-        });
-        rzp.open();
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message !== "Payment cancelled") {
-        toast.error(err.message);
-      }
-    } finally {
-      setPaying(false);
-    }
-  };
-
-  if (isClosed) {
-    return (
-      <div className="space-y-4">
-        <div className="py-6 text-center">
-          <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/20">
-            <CheckCircle2 className="size-7 text-green-600" />
-          </div>
-          <h3 className="mt-3 text-lg font-bold">Bill Settled</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Thank you! Your session is closed.
-          </p>
-        </div>
-        {feedbackEnabled && orderTotal > 0 && (
-          <CustomerFeedbackForm sessionId={sessionId} />
-        )}
-      </div>
-    );
-  }
 
   return (
-    <div className="space-y-4">
-      {/* Summary card */}
-      <div className="rounded-2xl border bg-card p-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <Receipt className="w-4 h-4 text-primary" />
-          <h3 className="text-lg font-bold">Bill Summary</h3>
-          {isBilling && (
-            <Badge variant="default" className="text-xs">
-              Bill Requested
-            </Badge>
-          )}
-        </div>
-
-        {/* Order list toggle */}
-        <button
-          className="w-full flex items-center justify-between text-sm cursor-pointer"
-          onClick={() => setShowOrders(!showOrders)}
-        >
-          <span className="text-muted-foreground">
-            {orders.length} order{orders.length !== 1 ? "s" : ""}
-          </span>
-          <div className="flex items-center gap-1 text-muted-foreground">
-            <span>₹{(orderTotal / 100).toFixed(0)}</span>
-            {showOrders ? (
-              <ChevronUp className="w-3.5 h-3.5" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5" />
-            )}
-          </div>
-        </button>
-
-        <AnimatePresence>
-          {showOrders && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              style={{ overflow: "hidden" }}
-            >
-              <div className="space-y-1 pt-1 border-t">
-                {orders.flatMap((o) =>
-                  o.items.map((item, i) => (
-                    <div
-                      key={`${o._id}-${i}`}
-                      className="flex justify-between text-xs text-muted-foreground"
-                    >
-                      <span>
-                        {item.name} × {item.quantity}
-                      </span>
-                      <span>
-                        ₹{((item.price * item.quantity) / 100).toFixed(0)}
-                      </span>
-                    </div>
-                  )),
-                )}
+    <div className="space-y-4 p-1">
+      <section className="rounded-2xl border bg-card p-5">
+        <h3 className="text-lg font-bold">Bill summary</h3>
+        <div className="mt-3 space-y-2">
+          {orders.flatMap((order) =>
+            order.items.map((item, index) => (
+              <div
+                key={`${order._id}-${index}`}
+                className="flex justify-between gap-3 text-sm text-muted-foreground"
+              >
+                <span>
+                  {item.name} × {item.quantity}
+                </span>
+                <span>₹{((item.price * item.quantity) / 100).toFixed(2)}</span>
               </div>
-            </motion.div>
+            )),
           )}
-        </AnimatePresence>
-
-        <div className="border-t pt-3 space-y-1.5">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Total</span>
-            <span className="font-medium">
-              ₹{(orderTotal / 100).toFixed(0)}
-            </span>
-          </div>
-          {paidAmount > 0 && (
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Paid</span>
-              <span className="text-green-600 font-medium">
-                −₹{(paidAmount / 100).toFixed(0)}
-              </span>
-            </div>
-          )}
-          <div className="flex justify-between font-bold text-lg pt-1 border-t">
-            <span>Remaining</span>
-            <span
-              className={remaining === 0 ? "text-green-600" : "text-primary"}
-            >
-              ₹{(remaining / 100).toFixed(0)}
-            </span>
-          </div>
         </div>
-      </div>
+        <div className="mt-4 flex justify-between border-t pt-3 text-base font-bold">
+          <span>Total</span>
+          <span>₹{(orderTotal / 100).toFixed(2)}</span>
+        </div>
+      </section>
 
-      {/* Payment history */}
-      {payments.length > 0 && (
-        <div className="rounded-2xl border bg-card p-4 space-y-2">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            Recent Payments
+      {!isClosed && orderTotal > 0 && (
+        <section className="rounded-2xl border bg-card p-5 text-center">
+          <h3 className="font-bold">Pay with UPI</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Scan the payment QR code on the back of the table stand to pay.
+            Please show the payment confirmation to staff.
           </p>
-          {payments.map((p) => (
-            <div
-              key={p._id}
-              className="flex items-center justify-between text-sm"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">{p.method}</span>
-                <Badge
-                  variant={
-                    p.status === "PAID"
-                      ? "default"
-                      : p.status === "FAILED"
-                        ? "destructive"
-                        : "secondary"
-                  }
-                  className="text-[10px] h-4"
-                >
-                  {p.status}
-                </Badge>
-              </div>
-              <span className="font-medium">
-                ₹{(p.amount / 100).toFixed(0)}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {remaining > 0 && (
-        <div className="space-y-3">
-          {/* Request bill button (if not already billing) */}
-          {!isBilling && (
-            <Button
-              variant="ghost"
-              className="w-full border"
-              disabled={requestingBill}
-              onClick={handleRequestBill}
-            >
-              {requestingBill ? (
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
-              ) : null}
-              Request Bill from Waiter
-            </Button>
+          {restaurant?.paymentQrUrl ? (
+            <img
+              src={restaurant.paymentQrUrl}
+              alt="UPI payment QR code"
+              className="mx-auto mt-4 max-h-72 w-full max-w-64 rounded-xl border bg-white object-contain p-2"
+            />
+          ) : (
+            <p className="mt-4 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+              The payment QR has not been added yet. Please ask staff for the
+              payment QR code.
+            </p>
           )}
-
-          <div className="rounded-2xl border-2 border-primary/20 bg-card p-4 shadow-sm sm:p-5">
-            <h3 className="text-base font-bold">Pay now</h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Choose how you want to pay the remaining ₹
-              {(remaining / 100).toFixed(2)}.
-            </p>
-            <div className="mt-4 flex gap-2">
-              {onlineEnabled && (
-                <>
-                  <MethodButton
-                    method="UPI"
-                    label="UPI"
-                    icon={Smartphone}
-                    selected={method === "UPI"}
-                    onClick={() => setMethod("UPI")}
-                  />
-                  <MethodButton
-                    method="CARD"
-                    label="Card"
-                    icon={CreditCard}
-                    selected={method === "CARD"}
-                    onClick={() => setMethod("CARD")}
-                  />
-                </>
-              )}
-              <MethodButton
-                method="CASH"
-                label="Cash"
-                icon={Banknote}
-                selected={method === "CASH"}
-                onClick={() => setMethod("CASH")}
-              />
-            </div>
-
-            {method === "CASH" ? (
-              bill.cashPaymentRequested ? (
-                <div className="mt-4 rounded-xl bg-primary/10 p-3 text-sm font-medium text-primary">
-                  Cash collection requested. A staff member will come to your
-                  table.
-                </div>
-              ) : (
-                <>
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    A team member will collect the cash and confirm your
-                    payment.
-                  </p>
-                  <Button
-                    className="mt-3 h-12 w-full gap-2 text-base"
-                    disabled={requestingCash}
-                    onClick={async () => {
-                      setRequestingCash(true);
-                      try {
-                        await requestCashPayment({ sessionId });
-                        toast.success("Cash collection requested");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Could not request cash collection",
-                        );
-                      } finally {
-                        setRequestingCash(false);
-                      }
-                    }}
-                  >
-                    <Banknote className="size-5" />
-                    {requestingCash
-                      ? "Requesting cash..."
-                      : "Request cash collection"}
-                  </Button>
-                </>
-              )
-            ) : onlineEnabled ? (
-              <>
-                {partialEnabled && (
-                  <div className="mt-3 space-y-2">
-                    <button
-                      className="text-xs text-primary underline cursor-pointer"
-                      onClick={() => setUsePartial(!usePartial)}
-                    >
-                      {usePartial ? "Pay full amount" : "Pay a partial amount"}
-                    </button>
-                    {usePartial && (
-                      <div className="flex items-center gap-2">
-                        <Label className="text-sm shrink-0">₹</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          max={(remaining / 100).toFixed(0)}
-                          step="0.01"
-                          placeholder={(remaining / 100).toFixed(0)}
-                          value={partialAmount}
-                          onChange={(e) => setPartialAmount(e.target.value)}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-                <Button
-                  className="mt-4 h-12 w-full gap-2 text-base"
-                  disabled={paying || payAmount <= 0}
-                  onClick={handleOnlinePayment}
-                >
-                  {paying ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> Processing…
-                    </>
-                  ) : (
-                    <>
-                      <CreditCard className="w-4 h-4" /> Pay ₹
-                      {(payAmount / 100).toFixed(0)} via {method}
-                    </>
-                  )}
-                </Button>
-              </>
-            ) : (
-              <div className="mt-4 flex items-start gap-2 rounded-xl bg-muted/50 p-3 text-sm text-muted-foreground">
-                <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                Online payment is unavailable. Choose Cash to request
-                collection.
-              </div>
-            )}
-          </div>
-        </div>
+        </section>
       )}
 
-      {remaining === 0 && orderTotal > 0 && (
-        <>
-          <div className="flex items-center gap-2 rounded-2xl border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/10">
-            <CheckCircle2 className="size-5 shrink-0 text-green-600" />
-            <p className="text-sm font-medium text-green-700 dark:text-green-400">
-              Payment confirmed. The session will close automatically once all
-              orders are delivered.
-            </p>
-          </div>
-        </>
+      {isClosed && (
+        <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-sm font-medium text-green-700 dark:text-green-400">
+          <CheckCircle2 className="size-5" />
+          Bill paid — this table session is closed.
+        </div>
+      )}
+      {isClosed && orderTotal > 0 && (
+        <CustomerFeedbackForm sessionId={sessionId} />
       )}
     </div>
   );

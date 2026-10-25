@@ -1,57 +1,28 @@
-import { useQuery, useMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { useAuth } from "@/hooks/use-auth.ts";
-import { Skeleton } from "@/components/ui/skeleton.tsx";
-import { Button } from "@/components/ui/button.tsx";
-import { Badge } from "@/components/ui/badge.tsx";
-import { toast } from "sonner";
+import { useMemo } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { formatDistanceToNow } from "date-fns";
-import type { Id } from "@/convex/_generated/dataModel.d.ts";
+import { Check, Clock3, MessageSquareText, Star } from "lucide-react";
+import { toast } from "sonner";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import { Badge } from "@/components/ui/badge.tsx";
+import { Button } from "@/components/ui/button.tsx";
+import { Skeleton } from "@/components/ui/skeleton.tsx";
 
 type OrderStatus =
-  | "PENDING"
-  | "CONFIRMED"
-  | "PREPARING"
-  | "READY"
-  | "DELIVERED"
-  | "CANCELLED";
-
-const STATUS_FLOW: Record<OrderStatus, Exclude<OrderStatus, "PENDING" | "CANCELLED"> | null> = {
-  PENDING: "CONFIRMED",
-  CONFIRMED: "PREPARING",
-  PREPARING: "READY",
-  READY: "DELIVERED",
-  DELIVERED: null,
-  CANCELLED: null,
-};
+  "PENDING" | "CONFIRMED" | "PREPARING" | "READY" | "DELIVERED" | "CANCELLED";
 
 const STATUS_LABEL: Record<OrderStatus, string> = {
-  PENDING: "Pending",
-  CONFIRMED: "Confirmed",
+  PENDING: "Waiting for acceptance",
+  CONFIRMED: "Accepted",
   PREPARING: "Preparing",
   READY: "Ready",
-  DELIVERED: "Delivered",
+  DELIVERED: "Collected",
   CANCELLED: "Cancelled",
 };
 
-const STATUS_COLOR: Record<OrderStatus, string> = {
-  PENDING: "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400",
-  CONFIRMED: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
-  PREPARING: "bg-orange-500/15 text-orange-600 dark:text-orange-400",
-  READY: "bg-green-500/15 text-green-600 dark:text-green-400",
-  DELIVERED: "bg-muted text-muted-foreground",
-  CANCELLED: "bg-destructive/15 text-destructive",
-};
-
-const NEXT_BTN: Record<string, string> = {
-  PENDING: "Confirm",
-  CONFIRMED: "Start Preparing",
-  PREPARING: "Mark Ready",
-  READY: "Mark Delivered",
-};
-
 function useRestaurantId() {
-  const restaurant = useQuery(api.users.getCurrentUserRestaurant);
+  const restaurant = useQuery(api.users.getCurrentUserRestaurant, {});
   return restaurant?._id as Id<"restaurants"> | undefined;
 }
 
@@ -59,266 +30,291 @@ export default function OrdersPage() {
   const restaurantId = useRestaurantId();
   const orders = useQuery(
     api.orders.listActiveForRestaurant,
-    restaurantId ? { restaurantId } : "skip"
+    restaurantId ? { restaurantId } : "skip",
   );
-  const waiterRequests = useQuery(
-    api.waiterRequests.listPending,
-    restaurantId ? { restaurantId } : "skip"
+  const feedback = useQuery(
+    api.feedback.listForRestaurant,
+    restaurantId ? { restaurantId } : "skip",
   );
   const updateStatus = useMutation(api.orders.updateStatus);
-  const acknowledge = useMutation(api.waiterRequests.acknowledge);
-  const resolve = useMutation(api.waiterRequests.resolve);
+  const markBillPaid = useMutation(api.sessions.markBillPaid);
 
-  const handleAdvance = async (
+  const sessions = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        sessionId: Id<"sessions">;
+        tableDisplayName: string;
+        orders: NonNullable<typeof orders>;
+      }
+    >();
+    for (const order of orders ?? []) {
+      if (order.sessionStatus === "CLOSED" || order.status === "CANCELLED")
+        continue;
+      const existing = grouped.get(order.sessionId);
+      if (existing) existing.orders.push(order);
+      else
+        grouped.set(order.sessionId, {
+          sessionId: order.sessionId,
+          tableDisplayName: order.tableDisplayName,
+          orders: [order],
+        });
+    }
+    return [...grouped.values()];
+  }, [orders]);
+
+  const updateOrder = async (
     orderId: Id<"orders">,
-    nextStatus: Exclude<OrderStatus, "PENDING" | "CANCELLED">
+    status: "CONFIRMED" | "READY",
   ) => {
+    if (!restaurantId) return;
     try {
-      await updateStatus({ orderId, status: nextStatus, restaurantId: restaurantId! });
-      toast.success(`Order moved to ${STATUS_LABEL[nextStatus]}`);
-    } catch {
-      toast.error("Failed to update order status");
+      await updateStatus({ orderId, status, restaurantId });
+      toast.success(status === "CONFIRMED" ? "Order accepted" : "Order ready");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not update the order.",
+      );
     }
   };
 
-  const handleCancel = async (orderId: Id<"orders">) => {
+  const confirmBillPaid = async (sessionId: Id<"sessions">) => {
+    if (!restaurantId) return;
     try {
-      await updateStatus({ orderId, restaurantId: restaurantId!, status: "CANCELLED" });
-      toast.success("Order cancelled");
-    } catch {
-      toast.error("Cannot cancel this order");
+      await markBillPaid({ sessionId, restaurantId });
+      toast.success("Bill marked paid and table session closed");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not close this session.",
+      );
     }
   };
-
-  const handleAcknowledge = async (requestId: Id<"waiterRequests">) => {
-    try {
-      await acknowledge({ requestId, restaurantId: restaurantId! });
-      toast.success("Request acknowledged");
-    } catch {
-      toast.error("Failed to acknowledge");
-    }
-  };
-
-  const handleResolve = async (requestId: Id<"waiterRequests">) => {
-    try {
-      await resolve({ requestId, restaurantId: restaurantId! });
-      toast.success("Request resolved");
-    } catch {
-      toast.error("Failed to resolve");
-    }
-  };
-
-  const statusGroups: OrderStatus[] = [
-    "PENDING",
-    "CONFIRMED",
-    "PREPARING",
-    "READY",
-  ];
 
   return (
-    <div className="p-6 space-y-8 max-w-7xl mx-auto">
-      <div>
-        <h1 className="text-2xl font-bold">Orders & Requests</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Live kitchen display and waiter request management
+    <div className="mx-auto max-w-7xl space-y-8 p-6">
+      <header>
+        <h1 className="text-2xl font-bold">Orders</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Accept orders, mark them ready for counter collection, and close each
+          table session when payment is complete.
         </p>
-      </div>
+      </header>
 
-      {/* Waiter Requests Panel */}
-      <section>
-        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-          Waiter Requests
-          {waiterRequests === undefined ? null : waiterRequests.length > 0 ? (
-            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-xs font-bold">
-              {waiterRequests.length}
-            </span>
-          ) : null}
-        </h2>
+      <section
+        aria-labelledby="order-queue-heading"
+        className="rounded-2xl border bg-card p-4 sm:p-6"
+      >
+        <div className="mb-5 flex items-center justify-between">
+          <div>
+            <h2 id="order-queue-heading" className="text-lg font-semibold">
+              Order Queue
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              New orders show first. Customers are told to wait until their
+              order is ready.
+            </p>
+          </div>
+          {orders && (
+            <Badge variant="secondary">{sessions.length} tables</Badge>
+          )}
+        </div>
 
-        {waiterRequests === undefined ? (
-          <div className="space-y-2">
-            {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-16 w-full" />
+        {orders === undefined ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            {[0, 1].map((item) => (
+              <Skeleton key={item} className="h-56 w-full rounded-xl" />
             ))}
           </div>
-        ) : waiterRequests.length === 0 ? (
-          <p className="text-muted-foreground text-sm py-4 border rounded-lg text-center">
-            No pending waiter requests
+        ) : sessions.length === 0 ? (
+          <p className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+            No active orders
           </p>
         ) : (
-          <div className="space-y-2">
-            {waiterRequests.map((req) => (
-              <div
-                key={req._id}
-                className="flex items-center justify-between gap-4 border rounded-lg px-4 py-3 bg-card"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <span
-                    className={`shrink-0 text-xs font-semibold px-2 py-1 rounded-md ${
-                      req.requestType === "CALL_WAITER"
-                        ? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
-                        : req.requestType === "REQUEST_BILL" ||
-                            req.requestType === "CASH_PAYMENT"
-                        ? "bg-blue-500/15 text-blue-600"
-                        : "bg-muted text-muted-foreground"
-                    }`}
-                  >
-                    {req.requestType === "CALL_WAITER"
-                      ? "CALL"
-                      : req.requestType === "REQUEST_BILL"
-                        ? "BILL"
-                        : req.requestType === "CASH_PAYMENT"
-                          ? "CASH"
-                          : req.requestType === "WATER"
-                            ? "WATER"
-                        : "OTHER"}
-                  </span>
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">
-                      {req.tableDisplayName}
-                    </p>
-                    {req.message && (
-                      <p className="text-xs text-muted-foreground truncate">
-                        {req.message}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {sessions.map((session) => {
+              const total = session.orders.reduce(
+                (sum, order) => sum + order.total,
+                0,
+              );
+              const readyToPay = session.orders.every(
+                (order) =>
+                  order.status === "READY" || order.status === "DELIVERED",
+              );
+
+              return (
+                <article
+                  key={session.sessionId}
+                  className="space-y-4 rounded-xl border bg-background p-4"
+                >
+                  <div className="flex items-start justify-between gap-3 border-b pb-3">
+                    <div>
+                      <h3 className="font-semibold">
+                        {session.tableDisplayName}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {session.orders.length} order
+                        {session.orders.length === 1 ? "" : "s"} · ₹
+                        {(total / 100).toFixed(2)}
                       </p>
-                    )}
+                    </div>
+                    <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Clock3 className="size-3.5" />
+                      {formatDistanceToNow(
+                        new Date(
+                          Math.min(
+                            ...session.orders.map((order) =>
+                              new Date(order.placedAt).getTime(),
+                            ),
+                          ),
+                        ),
+                        { addSuffix: true },
+                      )}
+                    </span>
                   </div>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {formatDistanceToNow(new Date(req.requestedAt), {
-                      addSuffix: true,
-                    })}
-                  </span>
-                  <span
-                    className={`shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${
-                      req.status === "PENDING"
-                        ? "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400"
-                        : "bg-blue-500/15 text-blue-600"
-                    }`}
-                  >
-                    {req.status}
-                  </span>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {req.status === "PENDING" && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() =>
-                        handleAcknowledge(req._id as Id<"waiterRequests">)
-                      }
-                    >
-                      Acknowledge
-                    </Button>
-                  )}
+
+                  <div className="space-y-3">
+                    {session.orders.map((order) => (
+                      <div
+                        key={order._id}
+                        className="rounded-lg bg-muted/40 p-3"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">
+                            Order #{order._id.slice(-5).toUpperCase()}
+                          </span>
+                          <Badge
+                            variant={
+                              order.status === "READY"
+                                ? "default"
+                                : order.status === "PENDING"
+                                  ? "secondary"
+                                  : "outline"
+                            }
+                          >
+                            {STATUS_LABEL[order.status as OrderStatus]}
+                          </Badge>
+                        </div>
+                        <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
+                          {order.items.map((item, index) => (
+                            <li key={`${order._id}-${index}`}>
+                              {item.quantity} × {item.name}
+                              {item.notes ? ` — ${item.notes}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {order.status === "PENDING" && (
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                void updateOrder(order._id, "CONFIRMED")
+                              }
+                            >
+                              Order accepted
+                            </Button>
+                          )}
+                          {(order.status === "CONFIRMED" ||
+                            order.status === "PREPARING") && (
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                void updateOrder(order._id, "READY")
+                              }
+                            >
+                              Order ready
+                            </Button>
+                          )}
+                          {order.status === "READY" && (
+                            <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                              <Check className="size-4" />
+                              Ready — customer can collect from the counter
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
                   <Button
-                    size="sm"
-                    onClick={() =>
-                      handleResolve(req._id as Id<"waiterRequests">)
-                    }
+                    className="w-full"
+                    disabled={!readyToPay}
+                    onClick={() => void confirmBillPaid(session.sessionId)}
                   >
-                    Resolve
+                    Bill paid
                   </Button>
-                </div>
-              </div>
-            ))}
+                  {!readyToPay && (
+                    <p className="-mt-2 text-center text-xs text-muted-foreground">
+                      Mark all orders ready before closing this table session.
+                    </p>
+                  )}
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
 
-      {/* Order Queue */}
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Order Queue</h2>
-        {orders === undefined ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {statusGroups.map((s) => (
-              <Skeleton key={s} className="h-48 w-full" />
-            ))}
+      <section
+        aria-labelledby="feedback-history-heading"
+        className="rounded-2xl border bg-card p-4 sm:p-6"
+      >
+        <div className="mb-4 flex items-center gap-2">
+          <MessageSquareText className="size-5 text-primary" />
+          <div>
+            <h2 id="feedback-history-heading" className="text-lg font-semibold">
+              Customer Feedback
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              Recent feedback history for this business.
+            </p>
           </div>
+        </div>
+        {feedback === undefined ? (
+          <Skeleton className="h-24 w-full rounded-xl" />
+        ) : feedback.length === 0 ? (
+          <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+            No feedback received yet.
+          </p>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {statusGroups.map((status) => {
-              const grouped = orders.filter((o) => o.status === status);
-              return (
-                <div key={status} className="space-y-3">
+          <div className="divide-y">
+            {feedback.map((entry) => (
+              <article key={entry._id} className="py-4 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`text-xs font-bold px-2 py-0.5 rounded-full ${STATUS_COLOR[status]}`}
-                    >
-                      {STATUS_LABEL[status]}
+                    <span className="font-medium">
+                      {entry.tableDisplayName}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      {grouped.length}
+                    <span
+                      className="flex items-center gap-0.5 text-amber-500"
+                      aria-label={`${entry.rating} out of 5 stars`}
+                    >
+                      {Array.from({ length: entry.rating }, (_, index) => (
+                        <Star key={index} className="size-3.5 fill-current" />
+                      ))}
                     </span>
                   </div>
-                  {grouped.length === 0 ? (
-                    <div className="border border-dashed rounded-lg p-4 text-center text-xs text-muted-foreground">
-                      No orders
-                    </div>
-                  ) : (
-                    grouped.map((order) => {
-                      const nextStatus = STATUS_FLOW[order.status as OrderStatus];
-                      return (
-                        <div
-                          key={order._id}
-                          className="border rounded-lg p-3 bg-card space-y-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-semibold text-sm">
-                              {order.tableDisplayName ?? "Table"}
-                            </span>
-                            <span className="text-xs text-muted-foreground">
-                              {formatDistanceToNow(new Date(order.placedAt), {
-                                addSuffix: true,
-                              })}
-                            </span>
-                          </div>
-                          <ul className="text-xs text-muted-foreground space-y-0.5">
-                            {order.items.map((item, i) => (
-                              <li key={i}>
-                                {item.quantity}× {item.name}
-                              </li>
-                            ))}
-                          </ul>
-                          <div className="flex items-center justify-between pt-1">
-                            <span className="text-sm font-semibold">
-                              ₹{(order.total / 100).toFixed(2)}
-                            </span>
-                            <div className="flex gap-1">
-                              {status === "PENDING" && (
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="text-destructive hover:text-destructive text-xs h-7 px-2"
-                                  onClick={() =>
-                                    handleCancel(order._id as Id<"orders">)
-                                  }
-                                >
-                                  Cancel
-                                </Button>
-                              )}
-                              {nextStatus && NEXT_BTN[status] && (
-                                <Button
-                                  size="sm"
-                                  className="text-xs h-7 px-2"
-                                  onClick={() =>
-                                    handleAdvance(
-                                      order._id as Id<"orders">,
-                                      nextStatus
-                                    )
-                                  }
-                                >
-                                  {NEXT_BTN[status]}
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
+                  <time className="text-xs text-muted-foreground">
+                    {new Date(entry.submittedAt).toLocaleString()}
+                  </time>
                 </div>
-              );
-            })}
+                {entry.comment && (
+                  <p className="mt-2 whitespace-pre-wrap text-sm">
+                    {entry.comment}
+                  </p>
+                )}
+                {entry.tags && entry.tags.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {entry.tags.map((tag) => (
+                      <Badge key={tag} variant="secondary">
+                        {tag}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </article>
+            ))}
           </div>
         )}
       </section>

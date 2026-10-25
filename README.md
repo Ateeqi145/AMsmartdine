@@ -13,18 +13,21 @@ SmartDine multi-restaurant app built with React, TypeScript, Vite, and Convex.
 
 ## Restaurant access and table sessions
 
-Restaurant workspaces use `/restaurant/...` URLs. Managers can manage menu items,
-tables, settings, and reports; Staff can handle orders, waiter requests, and
-payment confirmations but cannot edit the menu or tables or view revenue reports.
+Restaurant and cafe workspaces use `/restaurant/...` URLs. Super Admins choose
+the business type when creating an account. Managers can manage menu items,
+tables, branding, payment QR images, and reports; Staff can handle orders but
+cannot edit the menu or tables or view revenue reports.
 The system allows one active Super Admin and one active Manager per restaurant;
 multiple Staff accounts are supported.
 
-Customer QR sessions remain available across page reloads and stay open until
-the bill is fully paid and every non-cancelled order is delivered. The customer
-then sees the bill and feedback view, with an option to start a new visit.
-Customer actions appear as realtime notifications in the restaurant workspace;
-new orders also play a sound after staff interact with the page. Managers can
-upload JPEG, PNG, and WebP menu photos (up to 5 MB) from the Menu page.
+Customer QR sessions remain available across page reloads. Only the device that
+opened an active table session can resume it; other devices see that the table
+is occupied. Staff accept orders, mark them ready for counter collection, and
+mark the bill paid from the single Orders queue, which closes the session.
+Customers can view the configured UPI QR and submit feedback after the session
+is closed; feedback history appears in Orders. New orders play a selectable
+alert tone after staff interact with the page. Managers can upload JPEG, PNG,
+and WebP menu photos, cafe/restaurant logos, and payment QR images (up to 5 MB).
 Managers can load a small sample menu for testing when the restaurant menu is
 empty; the fixture does not overwrite existing categories or items.
 

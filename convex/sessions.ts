@@ -127,13 +127,10 @@ export const openOrJoinSession = mutation({
         )
         .first();
       if (!alreadyJoined) {
-        await ctx.db.insert("sessionVisitors", {
-          sessionId: existing._id,
-          customerId: args.customerId,
-          joinedAt: new Date().toISOString(),
-        });
-        await ctx.db.patch("sessions", existing._id, {
-          customerCount: existing.customerCount + args.customerCount,
+        throw new ConvexError({
+          message:
+            "This table is occupied. Please ask the staff for assistance.",
+          code: "FORBIDDEN",
         });
       }
       return { sessionId: existing._id, isNew: false };
@@ -186,6 +183,65 @@ export const openSession = mutation({
       customerCount: args.customerCount,
       openedAt: new Date().toISOString(),
     });
+  },
+});
+
+/** Staff: confirm payment and immediately close the table session. */
+export const markBillPaid = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    restaurantId: v.id("restaurants"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const user = await requireRestaurantAccess(ctx, args.restaurantId);
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (
+      !session ||
+      session.restaurantId !== args.restaurantId ||
+      session.status === "CLOSED"
+    ) {
+      throw new ConvexError({
+        message: "This table session is no longer active.",
+        code: "BAD_REQUEST",
+      });
+    }
+
+    const orders = await ctx.db
+      .query("orders")
+      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+      .collect();
+    const activeOrders = orders.filter((order) => order.status !== "CANCELLED");
+    if (
+      activeOrders.length === 0 ||
+      activeOrders.some(
+        (order) =>
+          order.status === "PENDING" ||
+          order.status === "CONFIRMED" ||
+          order.status === "PREPARING",
+      )
+    ) {
+      throw new ConvexError({
+        message:
+          "All orders must be ready before the bill can be marked paid.",
+        code: "BAD_REQUEST",
+      });
+    }
+
+    const totalAmount = activeOrders.reduce(
+      (total, order) => total + order.total,
+      0,
+    );
+    const now = new Date().toISOString();
+    await ctx.db.patch("sessions", args.sessionId, {
+      status: "CLOSED",
+      totalAmount,
+      paidAmount: totalAmount,
+      closedAt: now,
+      billClosedAt: now,
+      billClosedBy: user._id,
+    });
+    return null;
   },
 });
 

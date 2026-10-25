@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyRuntimeError, getErrorGuide } from "./error-catalog";
+import {
+  classifyRuntimeError,
+  getErrorGuide,
+  getUserFacingErrorMessage,
+} from "./error-catalog";
 
 describe("error diagnostics", () => {
   it("maps known backend authorization failures to the specific role action", () => {
@@ -18,6 +22,17 @@ describe("error diagnostics", () => {
     expect(
       getErrorGuide(undefined, "Unexpected new backend response").code,
     ).toBe("UNKNOWN_ERROR");
+  });
+
+  it("explains that a restaurant can only have one active manager", () => {
+    const error = Object.assign(
+      new Error('Uncaught ConvexError: {"code":"MANAGER_ALREADY_ASSIGNED"}'),
+      { data: { code: "MANAGER_ALREADY_ASSIGNED" } },
+    );
+
+    expect(getUserFacingErrorMessage(error, "Failed to assign role")).toBe(
+      "This restaurant already has an active manager. Each restaurant can have only one manager. Reassign or deactivate the current manager before assigning another.",
+    );
   });
 
   it("classifies failed page chunks and unhandled promise rejections", () => {

@@ -178,8 +178,8 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause:
       "The table session is closed or in billing state, so adding items or placing an order is disabled.",
     action:
-      "Refresh the QR page. For a closed session, ask staff to start a new visit; for billing, settle the current bill first.",
-    href: "/restaurant/billing",
+      "Refresh the QR page. For a closed session, ask staff to start a new visit; staff can close a paid session from Orders.",
+    href: "/restaurant/orders",
   },
   {
     code: "MENU_EMPTY",
@@ -222,8 +222,8 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     feature: "Table setup",
     cause: "At least one active session is still linked to this table.",
     action:
-      "Settle and close the session from Billing before deleting the table.",
-    href: "/restaurant/billing",
+      "Mark the bill paid from Orders to close the session before deleting the table.",
+    href: "/restaurant/orders",
   },
   {
     code: "CATEGORY_NOT_EMPTY",
@@ -279,7 +279,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
       "The requested payment is greater than the current outstanding bill, possibly because another payment completed meanwhile.",
     action:
       "Refresh the bill summary and retry payment for the updated remaining amount.",
-    href: "/restaurant/billing",
+    href: "/restaurant/orders",
   },
   {
     code: "CASH_EXCEEDS_BALANCE",
@@ -288,17 +288,17 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause: "The amount entered by staff is greater than the remaining balance.",
     action:
       "Refresh the bill and record only the amount actually collected, up to the remaining balance.",
-    href: "/restaurant/billing",
+    href: "/restaurant/orders",
   },
   {
     code: "BILL_HAS_OUTSTANDING_BALANCE",
     name: "Cannot close unpaid bill",
-    feature: "Billing",
+    feature: "Orders",
     cause:
       "The session total is greater than the recorded paid amount; closing is blocked to prevent losing an unpaid table balance.",
     action:
-      "Record the remaining cash or verify the online payment, then close the bill.",
-    href: "/restaurant/billing",
+      "Verify that the customer has paid, then use Bill paid in Orders.",
+    href: "/restaurant/orders",
   },
   {
     code: "FEEDBACK_DISABLED",
@@ -316,8 +316,8 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     cause:
       "The bill has not been fully paid, and the backend only accepts feedback after payment.",
     action:
-      "Complete the bill payment; the feedback form becomes available automatically.",
-    href: "/restaurant/billing",
+      "Complete payment and close the session from Orders; the feedback form becomes available automatically.",
+    href: "/restaurant/orders",
   },
   {
     code: "FEEDBACK_ALREADY_SUBMITTED",
@@ -408,6 +408,36 @@ export function getErrorGuide(code?: string, message?: string): ErrorGuide {
     ERROR_GUIDES.find((entry) => entry.code === matchedCode) ??
     ERROR_GUIDES.find((entry) => entry.code === "UNKNOWN_ERROR")!
   );
+}
+
+export function getUserFacingErrorMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  const errorData =
+    typeof error === "object" && error !== null && "data" in error
+      ? error.data
+      : undefined;
+  const dataMessage =
+    typeof errorData === "object" &&
+    errorData !== null &&
+    "message" in errorData &&
+    typeof errorData.message === "string"
+      ? errorData.message
+      : undefined;
+  const message = error instanceof Error ? error.message : "";
+
+  if (
+    message.includes("MANAGER_ALREADY_ASSIGNED") ||
+    (typeof errorData === "object" &&
+      errorData !== null &&
+      "code" in errorData &&
+      errorData.code === "MANAGER_ALREADY_ASSIGNED")
+  ) {
+    return "This restaurant already has an active manager. Each restaurant can have only one manager. Reassign or deactivate the current manager before assigning another.";
+  }
+
+  return dataMessage ?? (message || fallback);
 }
 
 export function classifyRuntimeError(
