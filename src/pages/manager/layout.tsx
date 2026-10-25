@@ -87,20 +87,37 @@ function playOrderAlert(
   oscillator.stop(context.currentTime + duration + 0.01);
 }
 
+function playCustomOrderAlert(
+  current: HTMLAudioElement | null,
+  source: string,
+): HTMLAudioElement {
+  const normalizedSource = new URL(source, window.location.href).href;
+  const player =
+    current?.src === normalizedSource ? current : new Audio(normalizedSource);
+  player.currentTime = 0;
+  void player.play().catch((error: unknown) => {
+    console.warn("Could not play the custom order alert sound.", error);
+  });
+  return player;
+}
+
 function StaffAlerts({
   restaurantId,
   soundEnabled,
   soundTone,
+  customSoundUrl,
 }: {
   restaurantId: Id<"restaurants">;
   soundEnabled: boolean;
   soundTone: AlertSound;
+  customSoundUrl?: string;
 }) {
   const notifications = useQuery(api.waiterRequests.listRecentCustomerActions, {
     restaurantId,
   });
   const navigate = useNavigate();
   const audioContext = useRef<AudioContext | null>(null);
+  const customAudio = useRef<HTMLAudioElement | null>(null);
   const seen = useRef(new Set<string>());
   const initialized = useRef(false);
 
@@ -140,6 +157,24 @@ function StaffAlerts({
   }, []);
 
   useEffect(() => {
+    const previewCustomSound = (event: Event) => {
+      const source = (event as CustomEvent<string>).detail;
+      if (typeof source === "string" && source.length > 0) {
+        customAudio.current = playCustomOrderAlert(customAudio.current, source);
+      }
+    };
+    window.addEventListener(
+      "smartdine:custom-order-sound-preview",
+      previewCustomSound,
+    );
+    return () =>
+      window.removeEventListener(
+        "smartdine:custom-order-sound-preview",
+        previewCustomSound,
+      );
+  }, []);
+
+  useEffect(() => {
     if (!notifications) return;
     if (!initialized.current) {
       for (const notification of notifications)
@@ -155,7 +190,14 @@ function StaffAlerts({
     for (const notification of fresh) {
       seen.current.add(notification._id);
       if (notification.eventType === "ORDER_PLACED" && soundEnabled) {
-        playOrderAlert(audioContext.current, soundTone);
+        if (customSoundUrl) {
+          customAudio.current = playCustomOrderAlert(
+            customAudio.current,
+            customSoundUrl,
+          );
+        } else {
+          playOrderAlert(audioContext.current, soundTone);
+        }
       }
       toast(notification.message, {
         description: `${notification.tableDisplayName} · ${new Date(notification.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
@@ -166,7 +208,7 @@ function StaffAlerts({
         },
       });
     }
-  }, [navigate, notifications, soundEnabled, soundTone]);
+  }, [customSoundUrl, navigate, notifications, soundEnabled, soundTone]);
 
   return null;
 }
@@ -253,6 +295,10 @@ export default function ManagerLayout() {
     api.users.getCurrentUserRestaurant,
     user?.isActive === false ? "skip" : {},
   );
+  const actionCounts = useQuery(
+    api.sessions.getManagerActionCounts,
+    restaurant?._id ? { restaurantId: restaurant._id } : "skip",
+  );
   const isManager = user?.role === "RESTAURANT_MANAGER";
   const [soundEnabled, setSoundEnabled] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
@@ -286,6 +332,17 @@ export default function ManagerLayout() {
 
   const visibleNav = navItems.filter((item) => !item.managerOnly || isManager);
   const restaurantId = restaurant?._id;
+  const getActionCount = (to: string) => {
+    if (to === "/restaurant/orders") {
+      return (
+        (actionCounts?.orders ?? 0) + (actionCounts?.unusedSessions ?? 0)
+      );
+    }
+    if (to === "/restaurant/dashboard" && isManager) {
+      return actionCounts?.unusedSessions ?? 0;
+    }
+    return 0;
+  };
 
   return (
     <>
@@ -333,15 +390,37 @@ export default function ManagerLayout() {
                     to={to}
                     className={({ isActive }) =>
                       cn(
-                        "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium",
+                        "flex items-center justify-between gap-2.5 rounded-md px-3 py-2 text-sm font-medium",
                         isActive
                           ? "bg-sidebar-accent text-sidebar-primary"
                           : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50",
                       )
                     }
                   >
-                    <Icon className="h-4 w-4" />
-                    {label}
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <span className="relative">
+                        <Icon className="h-4 w-4" />
+                        {getActionCount(to) > 0 && (
+                          <span
+                            aria-label={`${getActionCount(to)} action${getActionCount(to) === 1 ? "" : "s"} available`}
+                            className="absolute -right-2 -top-2 inline-flex size-4 animate-pulse items-center justify-center rounded-full bg-destructive text-[9px] font-bold leading-none text-destructive-foreground md:hidden"
+                          >
+                            {Math.min(getActionCount(to), 9)}
+                          </span>
+                        )}
+                      </span>
+                      {label}
+                    </span>
+                    {getActionCount(to) > 0 && (
+                      <span
+                        aria-label={`${getActionCount(to)} action${getActionCount(to) === 1 ? "" : "s"} available`}
+                        className="hidden min-w-5 animate-pulse items-center justify-center rounded-full bg-destructive px-1.5 py-0.5 text-[10px] font-bold leading-none text-destructive-foreground md:inline-flex"
+                      >
+                        {getActionCount(to) > 99
+                          ? "99+"
+                          : getActionCount(to)}
+                      </span>
+                    )}
                   </NavLink>
                 ))}
               </nav>
@@ -359,6 +438,7 @@ export default function ManagerLayout() {
                     restaurantId={restaurantId}
                     soundEnabled={soundEnabled}
                     soundTone={soundTone}
+                    customSoundUrl={restaurant?.orderSoundUrl}
                   />
                 </StaffAlertsBoundary>
               )}
@@ -412,7 +492,7 @@ export default function ManagerLayout() {
                   to={to}
                   className={({ isActive }) =>
                     cn(
-                      "flex flex-col items-center gap-0.5 px-2 py-1 text-[10px]",
+                      "relative flex flex-col items-center gap-0.5 px-2 py-1 text-[10px]",
                       isActive
                         ? "text-sidebar-primary"
                         : "text-muted-foreground",
@@ -420,6 +500,14 @@ export default function ManagerLayout() {
                   }
                 >
                   <Icon className="h-5 w-5" />
+                  {getActionCount(to) > 0 && (
+                    <span
+                      aria-label={`${getActionCount(to)} action${getActionCount(to) === 1 ? "" : "s"} available`}
+                      className="absolute right-1 top-0 inline-flex size-4 animate-pulse items-center justify-center rounded-full bg-destructive text-[9px] font-bold leading-none text-destructive-foreground"
+                    >
+                      {Math.min(getActionCount(to), 9)}
+                    </span>
+                  )}
                   <span>{label}</span>
                 </NavLink>
               ))}

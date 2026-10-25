@@ -231,6 +231,8 @@ export const getBillSummary = query({
     restaurant:
       | (Doc<"restaurants"> & { paymentQrUrl?: string | undefined })
       | null;
+    onlinePaymentEnabled: boolean;
+    feedbackEnabled: boolean;
     orders: Doc<"orders">[];
     payments: Doc<"payments">[];
     orderTotal: number;
@@ -246,8 +248,15 @@ export const getBillSummary = query({
         code: "NOT_FOUND",
       });
 
-    const [table, restaurantRecord, allOrders, allPayments, waiterRequests] =
-      await Promise.all([
+    const [
+      table,
+      restaurantRecord,
+      allOrders,
+      allPayments,
+      waiterRequests,
+      onlinePaymentFlag,
+      feedbackFlag,
+    ] = await Promise.all([
         ctx.db.get("tables", session.tableId),
         ctx.db.get("restaurants", session.restaurantId),
         ctx.db
@@ -262,7 +271,23 @@ export const getBillSummary = query({
           .query("waiterRequests")
           .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
           .collect(),
+        ctx.db
+          .query("featureFlags")
+          .withIndex("by_restaurant_key", (q) =>
+            q
+              .eq("restaurantId", session.restaurantId)
+              .eq("key", "online_payment"),
+          )
+          .unique(),
+        ctx.db
+          .query("featureFlags")
+          .withIndex("by_restaurant_key", (q) =>
+            q.eq("restaurantId", session.restaurantId).eq("key", "feedback"),
+          )
+          .unique(),
       ]);
+    const onlinePaymentEnabled = onlinePaymentFlag?.enabled ?? true;
+    const feedbackEnabled = feedbackFlag?.enabled ?? true;
     const restaurant = restaurantRecord
       ? {
           ...restaurantRecord,
@@ -293,6 +318,8 @@ export const getBillSummary = query({
       session,
       table,
       restaurant,
+      onlinePaymentEnabled,
+      feedbackEnabled,
       orders: activeOrders,
       payments: visiblePayments,
       orderTotal,

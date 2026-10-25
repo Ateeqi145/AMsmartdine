@@ -143,21 +143,30 @@ export function CustomerBillPanel({
 
       {!isClosed && orderTotal > 0 && (
         <section className="rounded-2xl border bg-card p-5 text-center">
-          <h3 className="font-bold">Pay with UPI</h3>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Scan the payment QR code on the back of the table stand to pay.
-            Please show the payment confirmation to staff.
-          </p>
-          {restaurant?.paymentQrUrl ? (
-            <img
-              src={restaurant.paymentQrUrl}
-              alt="UPI payment QR code"
-              className="mx-auto mt-4 max-h-72 w-full max-w-64 rounded-xl border bg-white object-contain p-2"
-            />
+          {bill.onlinePaymentEnabled ? (
+            <>
+              <h3 className="font-bold">Pay with UPI</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Scan the payment QR code on the back of the table stand to pay.
+                Please show the payment confirmation to staff.
+              </p>
+              {restaurant?.paymentQrUrl ? (
+                <img
+                  src={restaurant.paymentQrUrl}
+                  alt="UPI payment QR code"
+                  className="mx-auto mt-4 max-h-72 w-full max-w-64 rounded-xl border bg-white object-contain p-2"
+                />
+              ) : (
+                <p className="mt-4 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
+                  The payment QR has not been added yet. Please ask staff for
+                  the payment QR code.
+                </p>
+              )}
+            </>
           ) : (
-            <p className="mt-4 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-              The payment QR has not been added yet. Please ask staff for the
-              payment QR code.
+            <p className="text-sm text-muted-foreground">
+              Online payment is currently unavailable. Please ask a staff
+              member for payment instructions.
             </p>
           )}
         </section>
@@ -169,7 +178,7 @@ export function CustomerBillPanel({
           Bill paid — this table session is closed.
         </div>
       )}
-      {isClosed && orderTotal > 0 && (
+      {isClosed && orderTotal > 0 && bill.feedbackEnabled && (
         <CustomerFeedbackForm sessionId={sessionId} />
       )}
     </div>

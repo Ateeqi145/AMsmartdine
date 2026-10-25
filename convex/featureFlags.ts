@@ -1,6 +1,11 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { requireSuperAdmin, requireRestaurantAccess, generateRequestId } from "./lib/auth";
+import {
+  requireSuperAdmin,
+  requireRestaurantAccess,
+  requireRestaurantManager,
+  generateRequestId,
+} from "./lib/auth";
 import type { Id } from "./_generated/dataModel";
 
 const FEATURE_KEYS = [
@@ -61,7 +66,7 @@ export const setFlag = mutation({
       .unique();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
+      await ctx.db.patch("featureFlags", existing._id, {
         enabled: args.enabled,
         updatedAt: now,
         updatedBy: admin._id,
@@ -86,6 +91,58 @@ export const setFlag = mutation({
       requestId: generateRequestId(),
       timestamp: now,
     });
+  },
+});
+
+/** Manager: toggle customer-facing features supported by the manager workspace. */
+export const setManagerFlag = mutation({
+  args: {
+    restaurantId: v.id("restaurants"),
+    key: v.union(
+      v.literal("shared_cart"),
+      v.literal("online_payment"),
+      v.literal("feedback"),
+    ),
+    enabled: v.boolean(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const manager = await requireRestaurantManager(ctx, args.restaurantId);
+    const now = new Date().toISOString();
+    const existing = await ctx.db
+      .query("featureFlags")
+      .withIndex("by_restaurant_key", (q) =>
+        q.eq("restaurantId", args.restaurantId).eq("key", args.key),
+      )
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch("featureFlags", existing._id, {
+        enabled: args.enabled,
+        updatedAt: now,
+        updatedBy: manager._id,
+      });
+    } else {
+      await ctx.db.insert("featureFlags", {
+        restaurantId: args.restaurantId,
+        key: args.key,
+        enabled: args.enabled,
+        updatedAt: now,
+        updatedBy: manager._id,
+      });
+    }
+
+    await ctx.db.insert("auditLogs", {
+      actorId: manager._id,
+      actorRole: "RESTAURANT_MANAGER",
+      restaurantId: args.restaurantId,
+      action: "TOGGLE_FEATURE",
+      targetType: "featureFlag",
+      details: JSON.stringify({ key: args.key, enabled: args.enabled }),
+      requestId: generateRequestId(),
+      timestamp: now,
+    });
+    return null;
   },
 });
 
@@ -119,7 +176,7 @@ export const bulkSetFlags = mutation({
         .unique();
 
       if (existing) {
-        await ctx.db.patch(existing._id, {
+        await ctx.db.patch("featureFlags", existing._id, {
           enabled: flag.enabled,
           updatedAt: now,
           updatedBy: admin._id,

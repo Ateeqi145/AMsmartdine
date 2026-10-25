@@ -88,12 +88,21 @@ export default function TablePage() {
     api.sessions.getById,
     sessionId ? { sessionId } : "skip",
   );
-  const savedSessionIsStale = Boolean(
+  const savedSessionTableMismatch = Boolean(
     sessionId &&
     session !== undefined &&
     tableInfo?.table &&
     (!session || session.table?._id !== tableInfo.table._id),
   );
+  const savedSessionOrders = useQuery(
+    api.orders.listBySession,
+    sessionId && !savedSessionTableMismatch ? { sessionId } : "skip",
+  );
+  const savedSessionIsClosedUnused =
+    session?.session.status === "CLOSED" &&
+    savedSessionOrders !== undefined &&
+    savedSessionOrders.length === 0;
+  const savedSessionIsStale = savedSessionTableMismatch;
   const activeSessionId = savedSessionIsStale ? null : sessionId;
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -169,10 +178,7 @@ export default function TablePage() {
     api.cart.getCart,
     activeSessionId ? { sessionId: activeSessionId, customerId } : "skip",
   );
-  const orders = useQuery(
-    api.orders.listBySession,
-    activeSessionId ? { sessionId: activeSessionId } : "skip",
-  );
+  const orders = activeSessionId ? savedSessionOrders : undefined;
   const addToCart = useMutation(api.cart.addToCart);
   const updateCartItem = useMutation(api.cart.updateCartItem);
   const placeOrder = useMutation(api.orders.placeOrder);
@@ -377,16 +383,24 @@ export default function TablePage() {
         <section className="mx-auto max-w-2xl space-y-5 px-4 py-8">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-              Visit complete
+              {savedSessionIsClosedUnused ? "Session closed" : "Visit complete"}
             </p>
-            <h1 className="mt-2 text-2xl font-bold">Thank you for dining</h1>
+            <h1 className="mt-2 text-2xl font-bold">
+              {savedSessionIsClosedUnused
+                ? "This unused session was closed"
+                : "Thank you for dining"}
+            </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Your bill is settled. We would love to hear how your visit went.
+              {savedSessionIsClosedUnused
+                ? "Staff closed this table session because no order was placed."
+                : "Your bill is settled. We would love to hear how your visit went."}
             </p>
           </div>
-          <div className="rounded-2xl border bg-background">
-            <CustomerBillPanel sessionId={activeSessionId} />
-          </div>
+          {!savedSessionIsClosedUnused && (
+            <div className="rounded-2xl border bg-background">
+              <CustomerBillPanel sessionId={activeSessionId} />
+            </div>
+          )}
           <Button className="w-full" variant="outline" onClick={startNewVisit}>
             Start a new visit
           </Button>

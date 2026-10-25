@@ -1,4 +1,6 @@
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { api } from "@/convex/_generated/api.js";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
 import {
@@ -8,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
+import { Button } from "@/components/ui/button.tsx";
 import { Link } from "react-router-dom";
 import {
   QrCode,
@@ -43,9 +46,36 @@ export default function ManagerDashboard() {
     api.sessions.listActiveSessions,
     rid ? { restaurantId: rid } : "skip",
   );
+  const closeUnusedSession = useMutation(api.sessions.closeUnusedSession);
+  const [closingSessionId, setClosingSessionId] =
+    useState<Id<"sessions"> | null>(null);
 
   const loading = restaurant === undefined;
   const isManager = user?.role === "RESTAURANT_MANAGER";
+
+  const handleCloseUnusedSession = async (sessionId: Id<"sessions">) => {
+    if (
+      !rid ||
+      !window.confirm(
+        "Close this unused session? It can only be closed if no orders or cart items exist.",
+      )
+    ) {
+      return;
+    }
+    setClosingSessionId(sessionId);
+    try {
+      await closeUnusedSession({ sessionId, restaurantId: rid });
+      toast.success("Unused table session closed");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not close this unused session.",
+      );
+    } finally {
+      setClosingSessionId(null);
+    }
+  };
 
   if (restaurant === null) {
     return (
@@ -174,7 +204,7 @@ export default function ManagerDashboard() {
               {activeSessions.map((s) => (
                 <div
                   key={s._id}
-                  className="p-3 bg-green-500/5 border border-green-500/20 rounded-xl text-center"
+                  className="flex flex-col items-center gap-1 rounded-xl border border-green-500/20 bg-green-500/5 p-3 text-center"
                 >
                   <p className="font-bold text-sm">
                     {s.tableNumber ?? s.tableId.slice(-4)}
@@ -183,8 +213,21 @@ export default function ManagerDashboard() {
                     {s.customerCount} guests
                   </p>
                   <Badge variant="default" className="text-[10px] mt-1 h-4">
-                    Active
+                    {s.status === "BILLING" ? "Billing" : "Active"}
                   </Badge>
+                  {isManager && s.canCloseAsUnused && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-2"
+                      disabled={closingSessionId === s._id}
+                      onClick={() => void handleCloseUnusedSession(s._id)}
+                    >
+                      {closingSessionId === s._id
+                        ? "Closing..."
+                        : "Close unused"}
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>

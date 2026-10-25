@@ -82,6 +82,7 @@ export default defineSchema({
     logoUrl: v.optional(v.string()),
     logoStorageId: v.optional(v.id("_storage")),
     paymentQrStorageId: v.optional(v.id("_storage")),
+    orderSoundStorageId: v.optional(v.id("_storage")),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
     email: v.optional(v.string()),

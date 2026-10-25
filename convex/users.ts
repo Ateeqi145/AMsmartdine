@@ -28,10 +28,14 @@ export const getCurrentUserRestaurant = query({
     const paymentQrUrl = restaurant.paymentQrStorageId
       ? await ctx.storage.getUrl(restaurant.paymentQrStorageId)
       : undefined;
+    const orderSoundUrl = restaurant.orderSoundStorageId
+      ? await ctx.storage.getUrl(restaurant.orderSoundStorageId)
+      : undefined;
     return {
       ...restaurant,
       logoUrl: logoUrl ?? undefined,
       paymentQrUrl: paymentQrUrl ?? undefined,
+      orderSoundUrl: orderSoundUrl ?? undefined,
     };
   },
 });

@@ -11,7 +11,14 @@ export const listActiveSessions = query({
   handler: async (
     ctx,
     args,
-  ): Promise<Array<Doc<"sessions"> & { tableNumber: string }>> => {
+  ): Promise<
+    Array<
+      Doc<"sessions"> & {
+        tableNumber: string;
+        canCloseAsUnused: boolean;
+      }
+    >
+  > => {
     await requireRestaurantAccess(ctx, args.restaurantId);
     const [active, billing] = await Promise.all([
       ctx.db
@@ -31,12 +38,144 @@ export const listActiveSessions = query({
 
     const sessionsWithTables = await Promise.all(
       sessions.map(async (s) => {
-        const table = await ctx.db.get("tables", s.tableId);
+        const [table, order, cartItem] = await Promise.all([
+          ctx.db.get("tables", s.tableId),
+          ctx.db
+            .query("orders")
+            .withIndex("by_session", (q) => q.eq("sessionId", s._id))
+            .first(),
+          ctx.db
+            .query("cartItems")
+            .withIndex("by_session", (q) => q.eq("sessionId", s._id))
+            .first(),
+        ]);
         if (!table || table.restaurantId !== args.restaurantId) return null;
-        return { ...s, tableNumber: table.tableNumber };
+        return {
+          ...s,
+          tableNumber: table.tableNumber,
+          canCloseAsUnused:
+            s.status === "ACTIVE" && !order && !cartItem,
+        };
       }),
     );
     return sessionsWithTables.filter((session) => session !== null);
+  },
+});
+
+/** Staff navigation badges: count open orders and sessions that can be closed unused. */
+export const getManagerActionCounts = query({
+  args: { restaurantId: v.id("restaurants") },
+  returns: v.object({
+    orders: v.number(),
+    unusedSessions: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    await requireRestaurantAccess(ctx, args.restaurantId);
+    const activeOrderStatuses = [
+      "PENDING",
+      "CONFIRMED",
+      "PREPARING",
+      "READY",
+      "DELIVERED",
+    ] as const;
+    const [activeSessions, billingSessions, orderGroups] = await Promise.all([
+      ctx.db
+        .query("sessions")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "ACTIVE"),
+        )
+        .take(100),
+      ctx.db
+        .query("sessions")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "BILLING"),
+        )
+        .take(100),
+      Promise.all(
+        activeOrderStatuses.map((status) =>
+          ctx.db
+            .query("orders")
+            .withIndex("by_restaurant_status", (q) =>
+              q.eq("restaurantId", args.restaurantId).eq("status", status),
+            )
+            .take(100),
+        ),
+      ),
+    ]);
+    const sessions = [...activeSessions, ...billingSessions];
+    const sessionById = new Map(sessions.map((session) => [session._id, session]));
+    const orders = orderGroups.flat();
+    const openOrderCount = orders.filter((order) =>
+      sessionById.has(order.sessionId),
+    ).length;
+    const unusedSessionFlags = await Promise.all(
+      activeSessions.map(async (session) => {
+        const [table, order, cartItem] = await Promise.all([
+          ctx.db.get("tables", session.tableId),
+          ctx.db
+            .query("orders")
+            .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+            .first(),
+          ctx.db
+            .query("cartItems")
+            .withIndex("by_session", (q) => q.eq("sessionId", session._id))
+            .first(),
+        ]);
+        return table?.restaurantId === args.restaurantId && !order && !cartItem;
+      }),
+    );
+
+    return {
+      orders: openOrderCount,
+      unusedSessions: unusedSessionFlags.filter(Boolean).length,
+    };
+  },
+});
+
+/** Staff: close a session only when no order or cart has been created. */
+export const closeUnusedSession = mutation({
+  args: {
+    sessionId: v.id("sessions"),
+    restaurantId: v.id("restaurants"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRestaurantAccess(ctx, args.restaurantId);
+    const session = await ctx.db.get("sessions", args.sessionId);
+    if (
+      !session ||
+      session.restaurantId !== args.restaurantId ||
+      session.status !== "ACTIVE"
+    ) {
+      throw new ConvexError({
+        message: "This table session is no longer active.",
+        code: "BAD_REQUEST",
+      });
+    }
+
+    const [order, cartItem] = await Promise.all([
+      ctx.db
+        .query("orders")
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .first(),
+      ctx.db
+        .query("cartItems")
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .first(),
+    ]);
+    if (order || cartItem) {
+      throw new ConvexError({
+        message:
+          "This session has an order or items in the cart. It cannot be closed as unused.",
+        code: "SESSION_IN_USE",
+      });
+    }
+
+    await ctx.db.patch("sessions", args.sessionId, {
+      status: "CLOSED",
+      closedAt: new Date().toISOString(),
+    });
+    return null;
   },
 });
 

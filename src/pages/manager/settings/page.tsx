@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { BellRing, MonitorCog, ShieldCheck } from "lucide-react";
+import {
+  BellRing,
+  CreditCard,
+  MonitorCog,
+  Music2,
+  ShieldCheck,
+  ShoppingCart,
+  Star,
+} from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -13,6 +21,7 @@ import { Label } from "@/components/ui/label.tsx";
 
 type AlertSound = "chime" | "bell" | "pulse";
 type BrandAsset = "logo" | "paymentQr";
+type ManagerFeature = "shared_cart" | "online_payment" | "feedback";
 
 const SOUND_OPTIONS: Array<{ value: AlertSound; label: string }> = [
   { value: "chime", label: "Chime" },
@@ -20,13 +29,44 @@ const SOUND_OPTIONS: Array<{ value: AlertSound; label: string }> = [
   { value: "pulse", label: "Pulse" },
 ];
 
+const MANAGER_FEATURES: Array<{
+  key: ManagerFeature;
+  label: string;
+  description: string;
+  icon: typeof ShoppingCart;
+}> = [
+  {
+    key: "shared_cart",
+    label: "Shared customer cart",
+    description: "Let customers at the same table add to a shared order.",
+    icon: ShoppingCart,
+  },
+  {
+    key: "online_payment",
+    label: "UPI QR payment",
+    description: "Allow customers to view the payment QR in their bill.",
+    icon: CreditCard,
+  },
+  {
+    key: "feedback",
+    label: "Customer feedback",
+    description: "Collect ratings and comments after a visit.",
+    icon: Star,
+  },
+];
+
 export default function RestaurantSettingsPage() {
   const user = useQuery(api.users.getCurrentUser, {});
   const restaurant = useQuery(api.users.getCurrentUserRestaurant, {});
+  const featureFlags = useQuery(
+    api.featureFlags.listByRestaurant,
+    restaurant ? { restaurantId: restaurant._id } : "skip",
+  );
   const generateUploadUrl = useMutation(
     api.restaurants.generateBrandAssetUploadUrl,
   );
   const updateSettings = useMutation(api.restaurants.updateSettings);
+  const setManagerFeatureFlag = useMutation(api.featureFlags.setManagerFlag);
   const [soundEnabled, setSoundEnabledState] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
   );
@@ -41,15 +81,26 @@ export default function RestaurantSettingsPage() {
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [paymentQrPreview, setPaymentQrPreview] = useState<string | null>(null);
+  const [customSoundFile, setCustomSoundFile] = useState<File | null>(null);
+  const [customSoundPreview, setCustomSoundPreview] = useState<string | null>(
+    null,
+  );
+  const [removeCustomSound, setRemoveCustomSound] = useState(false);
   const [savingBrand, setSavingBrand] = useState(false);
+  const [savingSound, setSavingSound] = useState(false);
+  const [savingFeature, setSavingFeature] = useState<ManagerFeature | null>(
+    null,
+  );
 
   useEffect(
     () => () => {
       if (logoPreview?.startsWith("blob:")) URL.revokeObjectURL(logoPreview);
       if (paymentQrPreview?.startsWith("blob:"))
         URL.revokeObjectURL(paymentQrPreview);
+      if (customSoundPreview?.startsWith("blob:"))
+        URL.revokeObjectURL(customSoundPreview);
     },
-    [logoPreview, paymentQrPreview],
+    [customSoundPreview, logoPreview, paymentQrPreview],
   );
 
   const setSoundEnabled = (enabled: boolean) => {
@@ -96,17 +147,29 @@ export default function RestaurantSettingsPage() {
     }
   };
 
-  const uploadImage = async (file: File): Promise<Id<"_storage">> => {
+  const uploadAsset = async (file: File): Promise<Id<"_storage">> => {
     if (!restaurant) throw new Error("Business settings are not available.");
     const uploadUrl = await generateUploadUrl({
       restaurantId: restaurant._id,
     });
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const contentType =
+      file.type ||
+      ({
+        aac: "audio/aac",
+        m4a: "audio/mp4",
+        mp3: "audio/mpeg",
+        ogg: "audio/ogg",
+        wav: "audio/wav",
+        webm: "audio/webm",
+      }[extension] ??
+        "application/octet-stream");
     const response = await fetch(uploadUrl, {
       method: "POST",
-      headers: { "Content-Type": file.type },
+      headers: { "Content-Type": contentType },
       body: file,
     });
-    if (!response.ok) throw new Error("Image upload failed. Please try again.");
+    if (!response.ok) throw new Error("File upload failed. Please try again.");
     const body: unknown = await response.json();
     if (
       !body ||
@@ -114,9 +177,111 @@ export default function RestaurantSettingsPage() {
       !("storageId" in body) ||
       typeof body.storageId !== "string"
     ) {
-      throw new Error("The image upload returned an invalid response.");
+      throw new Error("The file upload returned an invalid response.");
     }
     return body.storageId as Id<"_storage">;
+  };
+
+  const selectCustomSound = (file: File | undefined): boolean => {
+    if (!file) return false;
+    const supportedType =
+      [
+        "audio/aac",
+        "audio/mp4",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/webm",
+        "audio/x-wav",
+      ].includes(file.type) ||
+      /\.(aac|m4a|mp3|ogg|wav|webm)$/i.test(file.name);
+    if (!supportedType) {
+      toast.error("Choose an MP3, WAV, OGG, AAC, M4A, or WebM audio file.");
+      return false;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Order alert sounds must be 5 MB or smaller.");
+      return false;
+    }
+    setCustomSoundPreview(URL.createObjectURL(file));
+    setCustomSoundFile(file);
+    setRemoveCustomSound(false);
+    return true;
+  };
+
+  const saveCustomSound = async () => {
+    if (!restaurant || (!customSoundFile && !removeCustomSound)) return;
+    setSavingSound(true);
+    try {
+      if (customSoundFile) {
+        const orderSoundStorageId = await uploadAsset(customSoundFile);
+        await updateSettings({
+          restaurantId: restaurant._id,
+          orderSoundStorageId,
+        });
+      } else {
+        await updateSettings({
+          restaurantId: restaurant._id,
+          removeOrderSound: true,
+        });
+      }
+      setCustomSoundFile(null);
+      setCustomSoundPreview(null);
+      setRemoveCustomSound(false);
+      toast.success(
+        customSoundFile
+          ? "Custom order sound saved for this business."
+          : "Custom order sound removed.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not save the order sound.",
+      );
+    } finally {
+      setSavingSound(false);
+    }
+  };
+
+  const previewCustomSound = () => {
+    const source = customSoundPreview ?? restaurant?.orderSoundUrl;
+    if (!source) {
+      toast.error("Choose or save a custom sound before previewing it.");
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("smartdine:custom-order-sound-preview", {
+        detail: source,
+      }),
+    );
+  };
+
+  const toggleManagerFeature = async (
+    key: ManagerFeature,
+    enabled: boolean,
+  ) => {
+    if (!restaurant) return;
+    setSavingFeature(key);
+    try {
+      await setManagerFeatureFlag({
+        restaurantId: restaurant._id,
+        key,
+        enabled,
+      });
+      const label = MANAGER_FEATURES.find(
+        (feature) => feature.key === key,
+      )?.label;
+      toast.success(`${label ?? "Feature"} ${enabled ? "enabled" : "disabled"}.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not update this feature.",
+      );
+    } finally {
+      setSavingFeature(null);
+    }
   };
 
   const saveBrand = async () => {
@@ -128,9 +293,9 @@ export default function RestaurantSettingsPage() {
     }
     setSavingBrand(true);
     try {
-      const logoStorageId = logoFile ? await uploadImage(logoFile) : undefined;
+      const logoStorageId = logoFile ? await uploadAsset(logoFile) : undefined;
       const paymentQrStorageId = paymentQrFile
-        ? await uploadImage(paymentQrFile)
+        ? await uploadAsset(paymentQrFile)
         : undefined;
       await updateSettings({
         restaurantId: restaurant._id,
@@ -235,6 +400,63 @@ export default function RestaurantSettingsPage() {
         </Card>
       )}
 
+      {user?.role === "RESTAURANT_MANAGER" && restaurant && (
+        <Card className="rounded-2xl">
+          <CardHeader>
+            <CardTitle className="text-base">Enabled features</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Control the customer features available for this business.
+              Changes take effect immediately.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {featureFlags === undefined
+              ? MANAGER_FEATURES.map(({ key, label }) => (
+                  <div
+                    key={key}
+                    className="h-16 animate-pulse rounded-xl border bg-muted/30"
+                    aria-label={`Loading ${label} setting`}
+                  />
+                ))
+              : MANAGER_FEATURES.map(({ key, label, description, icon: Icon }) => {
+                  const enabled =
+                    featureFlags.find((flag) => flag.key === key)?.enabled ??
+                    false;
+                  return (
+                    <div
+                      key={key}
+                      className={`flex items-center justify-between gap-4 rounded-xl border p-4 transition-colors ${
+                        enabled
+                          ? "border-primary/20 bg-primary/5"
+                          : "border-border bg-muted/30"
+                      }`}
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="rounded-lg bg-background p-2 text-primary">
+                          <Icon className="size-4" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-medium">{label}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {description}
+                          </p>
+                        </div>
+                      </div>
+                      <Switch
+                        aria-label={`${label} ${enabled ? "enabled" : "disabled"}`}
+                        checked={enabled}
+                        disabled={savingFeature === key}
+                        onCheckedChange={(checked) =>
+                          void toggleManagerFeature(key, checked)
+                        }
+                      />
+                    </div>
+                  );
+                })}
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2">
         <Card className="rounded-2xl">
           <CardHeader className="flex flex-row items-center gap-3 space-y-0">
@@ -275,9 +497,9 @@ export default function RestaurantSettingsPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="order-sound">Alert tone</Label>
+              <Label htmlFor="order-sound-tone">Built-in alert tone</Label>
               <select
-                id="order-sound"
+                id="order-sound-tone"
                 value={alertSound}
                 onChange={(event) => setSound(event.target.value as AlertSound)}
                 className="h-10 w-full rounded-md border bg-background px-3 text-sm"
@@ -289,9 +511,74 @@ export default function RestaurantSettingsPage() {
                 ))}
               </select>
               <p className="text-xs text-muted-foreground">
-                Selecting a tone plays a preview.
+                Used when no custom sound is saved. Selecting a tone plays a
+                preview.
               </p>
             </div>
+            {user?.role === "RESTAURANT_MANAGER" && restaurant && (
+              <div className="space-y-3 rounded-xl border p-4">
+                <div className="flex items-center gap-2">
+                  <Music2 className="size-4 text-primary" />
+                  <Label htmlFor="order-sound-file">Custom order sound</Label>
+                </div>
+                <Input
+                  id="order-sound-file"
+                  type="file"
+                  accept="audio/aac,audio/mp4,audio/mpeg,audio/ogg,audio/wav,audio/webm,.aac,.m4a,.mp3,.ogg,.wav,.webm"
+                  onChange={(event) => {
+                    if (!selectCustomSound(event.target.files?.[0])) {
+                      event.currentTarget.value = "";
+                    }
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Upload an MP3, WAV, OGG, AAC, M4A, or WebM file up to 5 MB.
+                  The saved sound is shared with staff on this business.
+                </p>
+                {(customSoundFile || restaurant.orderSoundUrl) &&
+                  !removeCustomSound && (
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={previewCustomSound}
+                      >
+                        Preview sound
+                      </Button>
+                      {restaurant.orderSoundUrl && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setCustomSoundFile(null);
+                            setCustomSoundPreview(null);
+                            setRemoveCustomSound(true);
+                          }}
+                        >
+                          Remove saved sound
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                {removeCustomSound && (
+                  <p className="text-xs text-muted-foreground">
+                    The saved custom sound will be removed when you save.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void saveCustomSound()}
+                  disabled={
+                    savingSound || (!customSoundFile && !removeCustomSound)
+                  }
+                >
+                  {savingSound ? "Saving sound..." : "Save custom sound"}
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

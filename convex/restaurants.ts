@@ -174,11 +174,16 @@ export const updateSettings = mutation({
     name: v.optional(v.string()),
     logoStorageId: v.optional(v.id("_storage")),
     paymentQrStorageId: v.optional(v.id("_storage")),
+    orderSoundStorageId: v.optional(v.id("_storage")),
+    removeOrderSound: v.optional(v.boolean()),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     await requireRestaurantManager(ctx, args.restaurantId);
-    const { restaurantId, ...fields } = args;
+    if (args.orderSoundStorageId && args.removeOrderSound) {
+      throw new Error("Choose a new alert sound or remove the current one.");
+    }
+    const { restaurantId, removeOrderSound, ...fields } = args;
     const current = await ctx.db.get("restaurants", restaurantId);
     if (!current) throw new Error("Business not found");
     if (fields.logoStorageId && current.logoStorageId) {
@@ -187,8 +192,15 @@ export const updateSettings = mutation({
     if (fields.paymentQrStorageId && current.paymentQrStorageId) {
       await ctx.storage.delete(current.paymentQrStorageId);
     }
+    if (
+      (fields.orderSoundStorageId || removeOrderSound) &&
+      current.orderSoundStorageId
+    ) {
+      await ctx.storage.delete(current.orderSoundStorageId);
+    }
     await ctx.db.patch("restaurants", restaurantId, {
       ...fields,
+      ...(removeOrderSound ? { orderSoundStorageId: undefined } : {}),
       updatedAt: new Date().toISOString(),
     });
     return null;

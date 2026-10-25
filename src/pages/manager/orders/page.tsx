@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { formatDistanceToNow } from "date-fns";
 import { Check, Clock3, MessageSquareText, Star } from "lucide-react";
@@ -32,12 +32,19 @@ export default function OrdersPage() {
     api.orders.listActiveForRestaurant,
     restaurantId ? { restaurantId } : "skip",
   );
+  const activeSessions = useQuery(
+    api.sessions.listActiveSessions,
+    restaurantId ? { restaurantId } : "skip",
+  );
   const feedback = useQuery(
     api.feedback.listForRestaurant,
     restaurantId ? { restaurantId } : "skip",
   );
   const updateStatus = useMutation(api.orders.updateStatus);
   const markBillPaid = useMutation(api.sessions.markBillPaid);
+  const closeUnusedSession = useMutation(api.sessions.closeUnusedSession);
+  const [closingSessionId, setClosingSessionId] =
+    useState<Id<"sessions"> | null>(null);
 
   const sessions = useMemo(() => {
     const grouped = new Map<
@@ -62,6 +69,9 @@ export default function OrdersPage() {
     }
     return [...grouped.values()];
   }, [orders]);
+  const unusedSessions = (activeSessions ?? []).filter(
+    (session) => session.canCloseAsUnused,
+  );
 
   const updateOrder = async (
     orderId: Id<"orders">,
@@ -92,6 +102,23 @@ export default function OrdersPage() {
     }
   };
 
+  const closeUnused = async (sessionId: Id<"sessions">) => {
+    if (!restaurantId) return;
+    setClosingSessionId(sessionId);
+    try {
+      await closeUnusedSession({ sessionId, restaurantId });
+      toast.success("Unused table session closed");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not close this unused session.",
+      );
+    } finally {
+      setClosingSessionId(null);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-7xl space-y-8 p-6">
       <header>
@@ -101,6 +128,51 @@ export default function OrdersPage() {
           table session when payment is complete.
         </p>
       </header>
+
+      {unusedSessions.length > 0 && (
+        <section
+          aria-labelledby="unused-sessions-heading"
+          className="rounded-2xl border bg-card p-4 sm:p-6"
+        >
+          <div className="mb-4">
+            <h2 id="unused-sessions-heading" className="text-lg font-semibold">
+              Unused table sessions
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Close sessions opened by a QR scan when no order or cart items
+              were created.
+            </p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {unusedSessions.map((session) => (
+              <article
+                key={session._id}
+                className="flex items-center justify-between gap-3 rounded-xl border bg-background p-4"
+              >
+                <div>
+                  <h3 className="font-semibold">
+                    {session.tableNumber}
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    {session.customerCount} guest
+                    {session.customerCount === 1 ? "" : "s"} · No order placed
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={closingSessionId === session._id}
+                  onClick={() => void closeUnused(session._id)}
+                >
+                  {closingSessionId === session._id
+                    ? "Closing..."
+                    : "Close unused"}
+                </Button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section
         aria-labelledby="order-queue-heading"
