@@ -29,12 +29,14 @@ export const listActiveSessions = query({
     ]);
     const sessions = [...active, ...billing];
 
-    return await Promise.all(
+    const sessionsWithTables = await Promise.all(
       sessions.map(async (s) => {
         const table = await ctx.db.get("tables", s.tableId);
-        return { ...s, tableNumber: table?.tableNumber ?? s.tableId };
+        if (!table || table.restaurantId !== args.restaurantId) return null;
+        return { ...s, tableNumber: table.tableNumber };
       }),
     );
+    return sessionsWithTables.filter((session) => session !== null);
   },
 });
 

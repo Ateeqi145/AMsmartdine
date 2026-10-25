@@ -220,7 +220,7 @@ export const ERROR_GUIDES: ErrorGuide[] = [
     code: "TABLE_HAS_ACTIVE_SESSION",
     name: "Table cannot be deleted during an active session",
     feature: "Table setup",
-    cause: "At least one active session is still linked to this table.",
+    cause: "An active or billing session is still linked to this table.",
     action:
       "Mark the bill paid from Orders to close the session before deleting the table.",
     href: "/restaurant/orders",
@@ -397,7 +397,7 @@ export function getErrorGuide(code?: string, message?: string): ErrorGuide {
     [/call waiter feature is not enabled/, "WAITER_FEATURE_DISABLED"],
     [/cannot delete a category/, "CATEGORY_NOT_EMPTY"],
     [
-      /cannot delete a table with an active session/,
+      /cannot delete a table (?:with an active session|while an active or billing session)/,
       "TABLE_HAS_ACTIVE_SESSION",
     ],
     [/already exists/, "DUPLICATE_TABLE_NUMBER"],

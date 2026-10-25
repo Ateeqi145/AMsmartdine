@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { Navigate, Outlet, NavLink, useNavigate } from "react-router-dom";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api.js";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
@@ -30,13 +30,6 @@ const navItems = [
 
 function SuperAdminGuard({ children }: { children: React.ReactNode }) {
   const user = useQuery(api.users.getCurrentUser, {});
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (user !== undefined && user?.role !== "SUPER_ADMIN") {
-      navigate("/unauthorized");
-    }
-  }, [user, navigate]);
 
   if (user === undefined) {
     return (
@@ -46,7 +39,12 @@ function SuperAdminGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (user?.role !== "SUPER_ADMIN") return null;
+  if (user?.isActive === false) {
+    return <Navigate to="/unauthorized?reason=inactive" replace />;
+  }
+  if (user?.role !== "SUPER_ADMIN") {
+    return <Navigate to="/unauthorized" replace />;
+  }
   return <>{children}</>;
 }
 

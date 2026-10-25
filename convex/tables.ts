@@ -1,5 +1,5 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { requireRestaurantAccess, requireRestaurantManager, generateRequestId } from "./lib/auth";
 
 /** Generate a unique QR token */
@@ -131,7 +131,7 @@ export const regenerateQr = mutation({
   },
 });
 
-/** Delete a table (only if no active sessions) */
+/** Delete a table only if it has no active or billing sessions */
 export const remove = mutation({
   args: {
     tableId: v.id("tables"),
@@ -139,14 +139,34 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireRestaurantManager(ctx, args.restaurantId);
-    // Check for active sessions
-    const activeSession = await ctx.db
+    const table = await ctx.db.get("tables", args.tableId);
+    if (!table || table.restaurantId !== args.restaurantId) {
+      throw new ConvexError({
+        message: "Table not found in this restaurant.",
+        code: "NOT_FOUND",
+      });
+    }
+    const [activeSession, billingSession] = await Promise.all([
+      ctx.db
       .query("sessions")
       .withIndex("by_table_status", (q) =>
         q.eq("tableId", args.tableId).eq("status", "ACTIVE"),
       )
-      .first();
-    if (activeSession) throw new Error("Cannot delete a table with an active session");
+      .first(),
+      ctx.db
+        .query("sessions")
+        .withIndex("by_table_status", (q) =>
+          q.eq("tableId", args.tableId).eq("status", "BILLING"),
+        )
+        .first(),
+    ]);
+    if (activeSession || billingSession) {
+      throw new ConvexError({
+        message:
+          "Cannot delete a table while an active or billing session is linked to it. Close the session from Orders first.",
+        code: "TABLE_HAS_ACTIVE_SESSION",
+      });
+    }
     await ctx.db.delete("tables", args.tableId);
   },
 });

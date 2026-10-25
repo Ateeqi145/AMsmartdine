@@ -6,7 +6,13 @@ import {
   Unauthenticated,
   useQuery,
 } from "convex/react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import {
+  Navigate,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   BarChart3,
   ClipboardList,
@@ -200,26 +206,12 @@ class StaffAlertsBoundary extends Component<
 
 function ManagerGuard({ children }: { children: React.ReactNode }) {
   const user = useQuery(api.users.getCurrentUser, {});
-  const navigate = useNavigate();
   const location = useLocation();
   const managerOnlyPage = [
     "/restaurant/tables",
     "/restaurant/menu",
     "/restaurant/reports",
   ].includes(location.pathname);
-
-  useEffect(() => {
-    if (user === undefined) return;
-    if (user?.role === "SUPER_ADMIN") navigate("/super-admin/dashboard");
-    else if (
-      user?.role !== "RESTAURANT_MANAGER" &&
-      user?.role !== "RESTAURANT_STAFF"
-    ) {
-      navigate("/unauthorized");
-    } else if (user.role === "RESTAURANT_STAFF" && managerOnlyPage) {
-      navigate("/restaurant/orders", { replace: true });
-    }
-  }, [user, navigate, managerOnlyPage]);
 
   if (user === undefined) {
     return (
@@ -228,13 +220,21 @@ function ManagerGuard({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
+  if (user?.isActive === false) {
+    return <Navigate to="/unauthorized?reason=inactive" replace />;
+  }
+  if (user?.role === "SUPER_ADMIN") {
+    return <Navigate to="/super-admin/dashboard" replace />;
+  }
   if (
     user?.role !== "RESTAURANT_MANAGER" &&
     user?.role !== "RESTAURANT_STAFF"
   ) {
-    return null;
+    return <Navigate to="/unauthorized" replace />;
   }
-  if (user.role === "RESTAURANT_STAFF" && managerOnlyPage) return null;
+  if (user.role === "RESTAURANT_STAFF" && managerOnlyPage) {
+    return <Navigate to="/restaurant/orders" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -249,7 +249,10 @@ function RedirectHome() {
 export default function ManagerLayout() {
   const { signout } = useAuth();
   const user = useQuery(api.users.getCurrentUser, {});
-  const restaurant = useQuery(api.users.getCurrentUserRestaurant, {});
+  const restaurant = useQuery(
+    api.users.getCurrentUserRestaurant,
+    user?.isActive === false ? "skip" : {},
+  );
   const isManager = user?.role === "RESTAURANT_MANAGER";
   const [soundEnabled, setSoundEnabled] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
@@ -297,15 +300,6 @@ export default function ManagerLayout() {
       <Authenticated>
         <ManagerGuard>
           <div className="flex h-screen overflow-hidden bg-background">
-            {restaurantId && (
-              <StaffAlertsBoundary key={restaurantId}>
-                <StaffAlerts
-                  restaurantId={restaurantId}
-                  soundEnabled={soundEnabled}
-                  soundTone={soundTone}
-                />
-              </StaffAlertsBoundary>
-            )}
             <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
               <div className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-4">
                 {restaurant?.logoUrl ? (
@@ -359,6 +353,15 @@ export default function ManagerLayout() {
               </button>
             </aside>
             <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
+              {restaurantId && (
+                <StaffAlertsBoundary key={restaurantId}>
+                  <StaffAlerts
+                    restaurantId={restaurantId}
+                    soundEnabled={soundEnabled}
+                    soundTone={soundTone}
+                  />
+                </StaffAlertsBoundary>
+              )}
               <header className="sticky top-0 z-30 flex h-14 items-center justify-end gap-2 border-b bg-background/90 px-4 backdrop-blur">
                 <div className="mr-auto flex min-w-0 items-center gap-2">
                   {restaurant?.logoUrl && (

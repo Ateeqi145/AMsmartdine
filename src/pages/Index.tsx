@@ -28,6 +28,10 @@ function RoleRouter() {
     );
   }
 
+  if (user?.isActive === false) {
+    return <Navigate to="/unauthorized?reason=inactive" replace />;
+  }
+
   if (!user?.role) {
     // Signed in but no role yet — show waiting state
     return (
