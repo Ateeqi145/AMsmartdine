@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api.js";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button.tsx";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
+import { buildUpiPaymentLink } from "@/lib/upi-payment";
 
 function CustomerFeedbackForm({ sessionId }: { sessionId: Id<"sessions"> }) {
   const hasSubmitted = useQuery(api.feedback.hasSubmitted, { sessionId });
@@ -115,6 +116,15 @@ export function CustomerBillPanel({
 
   const { session, restaurant, orders, orderTotal } = bill;
   const isClosed = session.status === "CLOSED";
+  const upiPaymentLink =
+    restaurant?.upiId && bill.remaining > 0
+      ? buildUpiPaymentLink({
+          upiId: restaurant.upiId,
+          payeeName: restaurant.name,
+          amountPaise: bill.remaining,
+          note: `Table bill ${sessionId.slice(-8)}`,
+        })
+      : null;
 
   return (
     <div className="space-y-4 p-1">
@@ -139,29 +149,61 @@ export function CustomerBillPanel({
           <span>Total</span>
           <span>₹{(orderTotal / 100).toFixed(2)}</span>
         </div>
+        {bill.paidAmount > 0 && (
+          <div className="mt-2 flex justify-between text-sm text-muted-foreground">
+            <span>Paid</span>
+            <span>₹{(bill.paidAmount / 100).toFixed(2)}</span>
+          </div>
+        )}
+        {bill.remaining > 0 && (
+          <div className="mt-2 flex justify-between font-semibold">
+            <span>Balance due</span>
+            <span>₹{(bill.remaining / 100).toFixed(2)}</span>
+          </div>
+        )}
       </section>
 
-      {!isClosed && orderTotal > 0 && (
+      {!isClosed && bill.remaining > 0 && (
         <section className="rounded-2xl border bg-card p-5 text-center">
           {bill.onlinePaymentEnabled ? (
             <>
-              <h3 className="font-bold">Pay with UPI</h3>
+              <h3 className="font-bold">Pay with a UPI app</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                Scan the payment QR code on the back of the table stand to pay.
-                Please show the payment confirmation to staff.
+                Open your installed UPI app with the amount prefilled. Return
+                here after paying and show the payment confirmation to staff.
               </p>
-              {restaurant?.paymentQrUrl ? (
-                <img
-                  src={restaurant.paymentQrUrl}
-                  alt="UPI payment QR code"
-                  className="mx-auto mt-4 max-h-72 w-full max-w-64 rounded-xl border bg-white object-contain p-2"
-                />
+              {upiPaymentLink ? (
+                <Button asChild className="mt-4 w-full">
+                  <a href={upiPaymentLink}>
+                    Pay ₹{(bill.remaining / 100).toFixed(2)} with UPI
+                  </a>
+                </Button>
               ) : (
                 <p className="mt-4 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-                  The payment QR has not been added yet. Please ask staff for
-                  the payment QR code.
+                  The restaurant has not configured its UPI ID yet. Please ask
+                  staff for help.
                 </p>
               )}
+              <p className="mt-3 text-xs text-muted-foreground">
+                Direct UPI payments are not automatically verified on this
+                website. The bill will remain unpaid until staff confirm it.
+              </p>
+              {restaurant?.paymentQrUrl ? (
+                <details className="mt-4 text-left">
+                  <summary className="cursor-pointer text-sm font-medium text-muted-foreground">
+                    Or scan the restaurant UPI QR
+                  </summary>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    QR payments cannot be automatically verified here. Please
+                    show the payment confirmation to staff.
+                  </p>
+                  <img
+                    src={restaurant.paymentQrUrl}
+                    alt="Restaurant UPI payment QR code"
+                    className="mx-auto mt-3 max-h-72 w-full max-w-64 rounded-xl border bg-white object-contain p-2"
+                  />
+                </details>
+              ) : null}
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -172,6 +214,12 @@ export function CustomerBillPanel({
         </section>
       )}
 
+      {!isClosed && orderTotal > 0 && bill.remaining === 0 && (
+        <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-sm font-medium text-green-700 dark:text-green-400">
+          <CheckCircle2 className="size-5" />
+          Payment received — your bill is fully paid.
+        </div>
+      )}
       {isClosed && (
         <div className="flex items-center gap-2 rounded-xl bg-green-500/10 p-3 text-sm font-medium text-green-700 dark:text-green-400">
           <CheckCircle2 className="size-5" />

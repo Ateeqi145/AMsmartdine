@@ -106,6 +106,7 @@ export const assignUserRole = mutation({
       v.literal("SUPER_ADMIN"),
       v.literal("RESTAURANT_MANAGER"),
       v.literal("RESTAURANT_STAFF"),
+      v.literal("DELIVERY_PERSON"),
     ),
     restaurantId: v.optional(v.id("restaurants")),
     isActive: v.optional(v.boolean()),
@@ -129,7 +130,7 @@ export const setUserActive = mutation({
   handler: async (ctx, args) => {
     await requireSuperAdmin(ctx);
     const target = await ctx.db.get("users", args.userId);
-    if (args.isActive && target?.role) {
+    if (args.isActive && target?.role && target.role !== "CUSTOMER") {
       await assertRoleSlotAvailable(ctx, {
         userId: args.userId,
         role: target.role,

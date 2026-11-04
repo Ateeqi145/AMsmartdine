@@ -8,11 +8,12 @@ import {
 } from "./lib/auth";
 
 const DEFAULT_FEATURES = [
-  "shared_cart",
+  "occupied_menu_access",
   "online_payment",
   "call_waiter",
   "feedback",
   "partial_payment",
+  "online_ordering",
 ] as const;
 
 /** SUPER_ADMIN: create a new restaurant */
@@ -135,22 +136,27 @@ export const listAll = query({
   args: {
     includeInactive: v.optional(v.boolean()),
   },
-  handler: async (ctx, args): Promise<Array<{
-    _id: string;
-    name: string;
-    slug: string;
-    isActive: boolean;
-    createdAt: string;
-    updatedAt: string;
-    description?: string;
-    businessType?: "RESTAURANT" | "CAFE";
-    address?: string;
-    phone?: string;
-    email?: string;
-    currency?: string;
-    timezone?: string;
-    logoUrl?: string;
-  }>> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    Array<{
+      _id: string;
+      name: string;
+      slug: string;
+      isActive: boolean;
+      createdAt: string;
+      updatedAt: string;
+      description?: string;
+      businessType?: "RESTAURANT" | "CAFE";
+      address?: string;
+      phone?: string;
+      email?: string;
+      currency?: string;
+      timezone?: string;
+      logoUrl?: string;
+    }>
+  > => {
     await requireSuperAdmin(ctx);
     const all = await ctx.db.query("restaurants").collect();
     if (args.includeInactive) return all;
@@ -172,6 +178,7 @@ export const updateSettings = mutation({
   args: {
     restaurantId: v.id("restaurants"),
     name: v.optional(v.string()),
+    upiId: v.optional(v.string()),
     logoStorageId: v.optional(v.id("_storage")),
     paymentQrStorageId: v.optional(v.id("_storage")),
     orderSoundStorageId: v.optional(v.id("_storage")),
@@ -183,9 +190,16 @@ export const updateSettings = mutation({
     if (args.orderSoundStorageId && args.removeOrderSound) {
       throw new Error("Choose a new alert sound or remove the current one.");
     }
-    const { restaurantId, removeOrderSound, ...fields } = args;
+    const { restaurantId, removeOrderSound, upiId, ...fields } = args;
     const current = await ctx.db.get("restaurants", restaurantId);
     if (!current) throw new Error("Business not found");
+    const trimmedUpiId = upiId?.trim();
+    if (
+      trimmedUpiId &&
+      !/^[A-Za-z0-9._-]{2,256}@[A-Za-z0-9.-]{2,64}$/.test(trimmedUpiId)
+    ) {
+      throw new Error("Enter a valid UPI ID, for example name@bank.");
+    }
     if (fields.logoStorageId && current.logoStorageId) {
       await ctx.storage.delete(current.logoStorageId);
     }
@@ -200,8 +214,73 @@ export const updateSettings = mutation({
     }
     await ctx.db.patch("restaurants", restaurantId, {
       ...fields,
+      ...(upiId !== undefined
+        ? { upiId: trimmedUpiId || undefined }
+        : {}),
       ...(removeOrderSound ? { orderSoundStorageId: undefined } : {}),
       updatedAt: new Date().toISOString(),
+    });
+    return null;
+  },
+});
+
+export const updateDeliverySettings = mutation({
+  args: {
+    restaurantId: v.id("restaurants"),
+    deliveryFeePaise: v.number(),
+    deliveryTaxRatePercent: v.number(),
+    deliveryDiscountPaise: v.number(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireRestaurantManager(ctx, args.restaurantId);
+    if (
+      !Number.isSafeInteger(args.deliveryFeePaise) ||
+      args.deliveryFeePaise < 0 ||
+      args.deliveryFeePaise > 100_000_000 ||
+      !Number.isFinite(args.deliveryTaxRatePercent) ||
+      args.deliveryTaxRatePercent < 0 ||
+      args.deliveryTaxRatePercent > 100 ||
+      !Number.isSafeInteger(args.deliveryDiscountPaise) ||
+      args.deliveryDiscountPaise < 0 ||
+      args.deliveryDiscountPaise > 100_000_000
+    ) {
+      throw new Error("Enter valid delivery fee, tax, and discount settings.");
+    }
+    await ctx.db.patch("restaurants", args.restaurantId, {
+      deliveryFeePaise: args.deliveryFeePaise,
+      deliveryTaxRatePercent: args.deliveryTaxRatePercent,
+      deliveryDiscountPaise: args.deliveryDiscountPaise,
+      updatedAt: new Date().toISOString(),
+    });
+    return null;
+  },
+});
+
+export const setDeliveryOverride = mutation({
+  args: {
+    restaurantId: v.id("restaurants"),
+    enabled: v.union(v.boolean(), v.null()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const now = new Date().toISOString();
+    await ctx.db.patch("restaurants", args.restaurantId, {
+      deliveryEnabledBySuperAdmin:
+        args.enabled === null ? undefined : args.enabled,
+      updatedAt: now,
+    });
+    await ctx.db.insert("auditLogs", {
+      actorId: admin._id,
+      actorRole: "SUPER_ADMIN",
+      restaurantId: args.restaurantId,
+      action: "SET_DELIVERY_OVERRIDE",
+      targetType: "restaurant",
+      targetId: args.restaurantId,
+      details: JSON.stringify({ enabled: args.enabled }),
+      requestId: generateRequestId(),
+      timestamp: now,
     });
     return null;
   },

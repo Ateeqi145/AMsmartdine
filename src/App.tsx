@@ -54,6 +54,11 @@ const ManagerSettingsPage = lazy(
   () => import("./pages/manager/settings/page.tsx"),
 );
 const TablePage = lazy(() => import("./pages/table/page.tsx"));
+const OnlineOrderPage = lazy(() => import("./pages/order/page.tsx"));
+const DeliveryTrackingPage = lazy(
+  () => import("./pages/delivery-tracking/page.tsx"),
+);
+const CustomerOrdersPage = lazy(() => import("./pages/customer/orders/page.tsx"));
 
 function LegacyRestaurantRedirect() {
   const location = useLocation();
@@ -125,6 +130,13 @@ export default function App() {
 
             {/* Customer QR table ordering */}
             <Route path="/table/:qrToken" element={<TablePage />} />
+            {/* Public home-delivery ordering and authenticated customer history */}
+            <Route path="/order/:slug" element={<OnlineOrderPage />} />
+            <Route
+              path="/delivery/track/:orderId"
+              element={<DeliveryTrackingPage />}
+            />
+            <Route path="/customer/orders" element={<CustomerOrdersPage />} />
 
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />

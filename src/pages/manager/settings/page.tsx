@@ -3,11 +3,12 @@ import { useMutation, useQuery } from "convex/react";
 import {
   BellRing,
   CreditCard,
+  Eye,
   MonitorCog,
   Music2,
   ShieldCheck,
-  ShoppingCart,
   Star,
+  Truck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/convex/_generated/api";
@@ -21,7 +22,14 @@ import { Label } from "@/components/ui/label.tsx";
 
 type AlertSound = "chime" | "bell" | "pulse";
 type BrandAsset = "logo" | "paymentQr";
-type ManagerFeature = "shared_cart" | "online_payment" | "feedback";
+type ManagerFeature =
+  "occupied_menu_access" | "online_payment" | "feedback" | "online_ordering";
+type DeliveryPricingDraft = {
+  restaurantId: Id<"restaurants">;
+  deliveryFee: string;
+  deliveryTaxRate: string;
+  deliveryDiscount: string;
+};
 
 const SOUND_OPTIONS: Array<{ value: AlertSound; label: string }> = [
   { value: "chime", label: "Chime" },
@@ -33,18 +41,20 @@ const MANAGER_FEATURES: Array<{
   key: ManagerFeature;
   label: string;
   description: string;
-  icon: typeof ShoppingCart;
+  icon: typeof Eye;
 }> = [
   {
-    key: "shared_cart",
-    label: "Shared customer cart",
-    description: "Let customers at the same table add to a shared order.",
-    icon: ShoppingCart,
+    key: "occupied_menu_access",
+    label: "Menu access at occupied tables",
+    description:
+      "Let other guests browse the menu while the first guest controls the table session.",
+    icon: Eye,
   },
   {
     key: "online_payment",
-    label: "UPI QR payment",
-    description: "Allow customers to view the payment QR in their bill.",
+    label: "UPI payments",
+    description:
+      "Allow customers to use the restaurant UPI ID or view its payment QR in their bill.",
     icon: CreditCard,
   },
   {
@@ -52,6 +62,13 @@ const MANAGER_FEATURES: Array<{
     label: "Customer feedback",
     description: "Collect ratings and comments after a visit.",
     icon: Star,
+  },
+  {
+    key: "online_ordering",
+    label: "Home delivery ordering",
+    description:
+      "Let customers browse this restaurant and place delivery orders online.",
+    icon: Truck,
   },
 ];
 
@@ -66,6 +83,9 @@ export default function RestaurantSettingsPage() {
     api.restaurants.generateBrandAssetUploadUrl,
   );
   const updateSettings = useMutation(api.restaurants.updateSettings);
+  const updateDeliverySettings = useMutation(
+    api.restaurants.updateDeliverySettings,
+  );
   const setManagerFeatureFlag = useMutation(api.featureFlags.setManagerFlag);
   const [soundEnabled, setSoundEnabledState] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
@@ -77,6 +97,7 @@ export default function RestaurantSettingsPage() {
       : "chime";
   });
   const [name, setName] = useState<string | null>(null);
+  const [upiId, setUpiId] = useState<string | null>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [paymentQrFile, setPaymentQrFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
@@ -91,6 +112,20 @@ export default function RestaurantSettingsPage() {
   const [savingFeature, setSavingFeature] = useState<ManagerFeature | null>(
     null,
   );
+  const [deliveryPricingDraft, setDeliveryPricingDraft] =
+    useState<DeliveryPricingDraft | null>(null);
+  const [savingDeliverySettings, setSavingDeliverySettings] = useState(false);
+  const currentDeliveryPricing =
+    restaurant && deliveryPricingDraft?.restaurantId === restaurant._id
+      ? deliveryPricingDraft
+      : {
+          restaurantId: restaurant?._id,
+          deliveryFee: String((restaurant?.deliveryFeePaise ?? 0) / 100),
+          deliveryTaxRate: String(restaurant?.deliveryTaxRatePercent ?? 0),
+          deliveryDiscount: String(
+            (restaurant?.deliveryDiscountPaise ?? 0) / 100,
+          ),
+        };
 
   useEffect(
     () => () => {
@@ -193,8 +228,7 @@ export default function RestaurantSettingsPage() {
         "audio/wav",
         "audio/webm",
         "audio/x-wav",
-      ].includes(file.type) ||
-      /\.(aac|m4a|mp3|ogg|wav|webm)$/i.test(file.name);
+      ].includes(file.type) || /\.(aac|m4a|mp3|ogg|wav|webm)$/i.test(file.name);
     if (!supportedType) {
       toast.error("Choose an MP3, WAV, OGG, AAC, M4A, or WebM audio file.");
       return false;
@@ -257,6 +291,44 @@ export default function RestaurantSettingsPage() {
     );
   };
 
+  const saveDeliverySettings = async () => {
+    if (!restaurant) return;
+    const feeRupees = Number(currentDeliveryPricing.deliveryFee);
+    const taxPercent = Number(currentDeliveryPricing.deliveryTaxRate);
+    const discountRupees = Number(currentDeliveryPricing.deliveryDiscount);
+    if (
+      !Number.isFinite(feeRupees) ||
+      feeRupees < 0 ||
+      !Number.isFinite(taxPercent) ||
+      taxPercent < 0 ||
+      taxPercent > 100 ||
+      !Number.isFinite(discountRupees) ||
+      discountRupees < 0
+    ) {
+      toast.error("Enter valid non-negative delivery settings.");
+      return;
+    }
+    setSavingDeliverySettings(true);
+    try {
+      await updateDeliverySettings({
+        restaurantId: restaurant._id,
+        deliveryFeePaise: Math.round(feeRupees * 100),
+        deliveryTaxRatePercent: taxPercent,
+        deliveryDiscountPaise: Math.round(discountRupees * 100),
+      });
+      setDeliveryPricingDraft(null);
+      toast.success("Delivery pricing saved.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not save delivery pricing.",
+      );
+    } finally {
+      setSavingDeliverySettings(false);
+    }
+  };
+
   const toggleManagerFeature = async (
     key: ManagerFeature,
     enabled: boolean,
@@ -272,7 +344,9 @@ export default function RestaurantSettingsPage() {
       const label = MANAGER_FEATURES.find(
         (feature) => feature.key === key,
       )?.label;
-      toast.success(`${label ?? "Feature"} ${enabled ? "enabled" : "disabled"}.`);
+      toast.success(
+        `${label ?? "Feature"} ${enabled ? "enabled" : "disabled"}.`,
+      );
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -300,11 +374,13 @@ export default function RestaurantSettingsPage() {
       await updateSettings({
         restaurantId: restaurant._id,
         name: businessName.trim(),
+        ...(upiId !== null ? { upiId } : {}),
         ...(logoStorageId ? { logoStorageId } : {}),
         ...(paymentQrStorageId ? { paymentQrStorageId } : {}),
       });
       setLogoFile(null);
       setPaymentQrFile(null);
+      setUpiId(null);
       toast.success("Business branding saved.");
     } catch (error) {
       toast.error(
@@ -338,7 +414,8 @@ export default function RestaurantSettingsPage() {
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               The name and logo appear in the staff workspace and on customer QR
-              pages. Upload the payment QR used on your table stands.
+              pages. Configure this restaurant&apos;s UPI ID for direct app
+              payments or upload its payment QR.
             </p>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -350,6 +427,20 @@ export default function RestaurantSettingsPage() {
                 maxLength={100}
                 onChange={(event) => setName(event.target.value)}
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="business-upi-id">Restaurant UPI ID</Label>
+              <Input
+                id="business-upi-id"
+                autoComplete="off"
+                placeholder="name@bank"
+                value={upiId ?? restaurant.upiId ?? ""}
+                onChange={(event) => setUpiId(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Used to open the customer&apos;s UPI app with the bill amount.
+                Payment still needs staff verification.
+              </p>
             </div>
             <div className="grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
@@ -388,8 +479,7 @@ export default function RestaurantSettingsPage() {
                   />
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Shown to customers in the bill view after scanning the table
-                  QR.
+                  Manual fallback shown to customers in the bill view.
                 </p>
               </div>
             </div>
@@ -403,10 +493,106 @@ export default function RestaurantSettingsPage() {
       {user?.role === "RESTAURANT_MANAGER" && restaurant && (
         <Card className="rounded-2xl">
           <CardHeader>
+            <CardTitle className="text-base">Online delivery pricing</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              These values are applied to delivery orders on the server. The
+              public menu is{" "}
+              <a
+                className="font-medium text-primary underline underline-offset-4"
+                href={`/order/${restaurant.slug}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {window.location.origin}/order/{restaurant.slug}
+              </a>
+              .
+            </p>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-3">
+            <div className="space-y-2">
+              <Label htmlFor="delivery-fee">Delivery charge (₹)</Label>
+              <Input
+                id="delivery-fee"
+                type="number"
+                min="0"
+                step="0.01"
+                value={currentDeliveryPricing.deliveryFee}
+                onChange={(event) =>
+                  setDeliveryPricingDraft({
+                    restaurantId: restaurant._id,
+                    deliveryFee: event.target.value,
+                    deliveryTaxRate: currentDeliveryPricing.deliveryTaxRate,
+                    deliveryDiscount: currentDeliveryPricing.deliveryDiscount,
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="delivery-tax">Tax rate (%)</Label>
+              <Input
+                id="delivery-tax"
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={currentDeliveryPricing.deliveryTaxRate}
+                onChange={(event) =>
+                  setDeliveryPricingDraft({
+                    restaurantId: restaurant._id,
+                    deliveryFee: currentDeliveryPricing.deliveryFee,
+                    deliveryTaxRate: event.target.value,
+                    deliveryDiscount: currentDeliveryPricing.deliveryDiscount,
+                  })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="delivery-discount">Fixed discount (₹)</Label>
+              <Input
+                id="delivery-discount"
+                type="number"
+                min="0"
+                step="0.01"
+                value={currentDeliveryPricing.deliveryDiscount}
+                onChange={(event) =>
+                  setDeliveryPricingDraft({
+                    restaurantId: restaurant._id,
+                    deliveryFee: currentDeliveryPricing.deliveryFee,
+                    deliveryTaxRate: currentDeliveryPricing.deliveryTaxRate,
+                    deliveryDiscount: event.target.value,
+                  })
+                }
+              />
+            </div>
+            <div className="sm:col-span-3">
+              <Button
+                onClick={() => void saveDeliverySettings()}
+                disabled={savingDeliverySettings}
+              >
+                {savingDeliverySettings ? "Saving..." : "Save delivery pricing"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {user?.role === "RESTAURANT_MANAGER" && restaurant && (
+        <Card className="rounded-2xl">
+          <CardHeader>
             <CardTitle className="text-base">Enabled features</CardTitle>
             <p className="text-sm text-muted-foreground">
-              Control the customer features available for this business.
-              Changes take effect immediately.
+              Control the customer features available for this business. Changes
+              take effect immediately unless a Super Admin has set an
+              availability override.
+              {restaurant.deliveryEnabledBySuperAdmin !== undefined && (
+                <span className="mt-1 block font-medium text-amber-700 dark:text-amber-400">
+                  Home delivery currently follows the Super Admin override (
+                  {restaurant.deliveryEnabledBySuperAdmin
+                    ? "enabled"
+                    : "disabled"}
+                  ). Your manager preference is saved but does not override it.
+                </span>
+              )}
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -418,41 +604,43 @@ export default function RestaurantSettingsPage() {
                     aria-label={`Loading ${label} setting`}
                   />
                 ))
-              : MANAGER_FEATURES.map(({ key, label, description, icon: Icon }) => {
-                  const enabled =
-                    featureFlags.find((flag) => flag.key === key)?.enabled ??
-                    false;
-                  return (
-                    <div
-                      key={key}
-                      className={`flex items-center justify-between gap-4 rounded-xl border p-4 transition-colors ${
-                        enabled
-                          ? "border-primary/20 bg-primary/5"
-                          : "border-border bg-muted/30"
-                      }`}
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span className="rounded-lg bg-background p-2 text-primary">
-                          <Icon className="size-4" />
-                        </span>
-                        <div>
-                          <p className="text-sm font-medium">{label}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {description}
-                          </p>
+              : MANAGER_FEATURES.map(
+                  ({ key, label, description, icon: Icon }) => {
+                    const enabled =
+                      featureFlags.find((flag) => flag.key === key)?.enabled ??
+                      key === "occupied_menu_access";
+                    return (
+                      <div
+                        key={key}
+                        className={`flex items-center justify-between gap-4 rounded-xl border p-4 transition-colors ${
+                          enabled
+                            ? "border-primary/20 bg-primary/5"
+                            : "border-border bg-muted/30"
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="rounded-lg bg-background p-2 text-primary">
+                            <Icon className="size-4" />
+                          </span>
+                          <div>
+                            <p className="text-sm font-medium">{label}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {description}
+                            </p>
+                          </div>
                         </div>
+                        <Switch
+                          aria-label={`${label} ${enabled ? "enabled" : "disabled"}`}
+                          checked={enabled}
+                          disabled={savingFeature === key}
+                          onCheckedChange={(checked) =>
+                            void toggleManagerFeature(key, checked)
+                          }
+                        />
                       </div>
-                      <Switch
-                        aria-label={`${label} ${enabled ? "enabled" : "disabled"}`}
-                        checked={enabled}
-                        disabled={savingFeature === key}
-                        onCheckedChange={(checked) =>
-                          void toggleManagerFeature(key, checked)
-                        }
-                      />
-                    </div>
-                  );
-                })}
+                    );
+                  },
+                )}
           </CardContent>
         </Card>
       )}

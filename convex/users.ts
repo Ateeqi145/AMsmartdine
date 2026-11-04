@@ -48,6 +48,7 @@ export const assignRole = mutation({
       v.literal("SUPER_ADMIN"),
       v.literal("RESTAURANT_MANAGER"),
       v.literal("RESTAURANT_STAFF"),
+      v.literal("DELIVERY_PERSON"),
     ),
     restaurantId: v.optional(v.id("restaurants")),
   },

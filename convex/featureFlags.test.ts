@@ -38,14 +38,17 @@ describe("manager feature controls", () => {
 
     await manager.mutation(api.featureFlags.setManagerFlag, {
       restaurantId,
-      key: "shared_cart",
+      key: "occupied_menu_access",
       enabled: false,
     });
     await expect(
       manager.query(api.featureFlags.listByRestaurant, { restaurantId }),
     ).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ key: "shared_cart", enabled: false }),
+        expect.objectContaining({
+          key: "occupied_menu_access",
+          enabled: false,
+        }),
       ]),
     );
     await expect(

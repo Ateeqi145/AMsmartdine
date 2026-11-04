@@ -1,6 +1,38 @@
 import type { Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
 
+export async function closeSessionIfAllOrdersCancelled(
+  ctx: MutationCtx,
+  sessionId: Id<"sessions">,
+) {
+  const session = await ctx.db.get("sessions", sessionId);
+  if (!session || session.status === "CLOSED") return false;
+
+  const activeStatuses = [
+    "PENDING",
+    "CONFIRMED",
+    "PREPARING",
+    "READY",
+    "OUT_FOR_DELIVERY",
+    "DELIVERED",
+  ] as const;
+  for (const status of activeStatuses) {
+    const activeOrder = await ctx.db
+      .query("orders")
+      .withIndex("by_session_and_status", (q) =>
+        q.eq("sessionId", sessionId).eq("status", status),
+      )
+      .first();
+    if (activeOrder) return false;
+  }
+
+  await ctx.db.patch("sessions", sessionId, {
+    status: "CLOSED",
+    closedAt: new Date().toISOString(),
+  });
+  return true;
+}
+
 export async function closeSessionWhenSettled(
   ctx: MutationCtx,
   sessionId: Id<"sessions">,

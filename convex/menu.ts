@@ -42,6 +42,129 @@ export const listCategoriesPublic = query({
   },
 });
 
+const onlineCategoryValidator = v.object({
+  _id: v.id("menuCategories"),
+  name: v.string(),
+  description: v.optional(v.string()),
+  sortOrder: v.number(),
+});
+
+const onlineItemValidator = v.object({
+  _id: v.id("menuItems"),
+  categoryId: v.id("menuCategories"),
+  name: v.string(),
+  description: v.optional(v.string()),
+  price: v.number(),
+  imageUrl: v.optional(v.string()),
+  isVeg: v.optional(v.boolean()),
+  sortOrder: v.number(),
+  tags: v.optional(v.array(v.string())),
+});
+
+/** Public online menu, addressed by the restaurant's stable public slug. */
+export const getOnlineMenu = query({
+  args: { slug: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      restaurant: v.object({
+        _id: v.id("restaurants"),
+        name: v.string(),
+        slug: v.string(),
+        description: v.optional(v.string()),
+        logoUrl: v.optional(v.string()),
+        address: v.optional(v.string()),
+        phone: v.optional(v.string()),
+        currency: v.optional(v.string()),
+      }),
+      onlinePaymentEnabled: v.boolean(),
+      categories: v.array(onlineCategoryValidator),
+      menuItems: v.array(onlineItemValidator),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const restaurant = await ctx.db
+      .query("restaurants")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .unique();
+    if (!restaurant || !restaurant.isActive) return null;
+
+    const onlineOrderingFlag = await ctx.db
+      .query("featureFlags")
+      .withIndex("by_restaurant_key", (q) =>
+        q.eq("restaurantId", restaurant._id).eq("key", "online_ordering"),
+      )
+      .unique();
+    const deliveryEnabled =
+      restaurant.deliveryEnabledBySuperAdmin ??
+      onlineOrderingFlag?.enabled ??
+      true;
+    if (!deliveryEnabled) return null;
+
+    const [categories, items, logoUrl, paymentFlag] = await Promise.all([
+      ctx.db
+        .query("menuCategories")
+        .withIndex("by_restaurant_sort", (q) =>
+          q.eq("restaurantId", restaurant._id),
+        )
+        .take(100),
+      ctx.db
+        .query("menuItems")
+        .withIndex("by_restaurant_available", (q) =>
+          q.eq("restaurantId", restaurant._id).eq("isAvailable", true),
+        )
+        .take(500),
+      restaurant.logoStorageId
+        ? ctx.storage.getUrl(restaurant.logoStorageId)
+        : Promise.resolve(restaurant.logoUrl),
+      ctx.db
+        .query("featureFlags")
+        .withIndex("by_restaurant_key", (q) =>
+          q.eq("restaurantId", restaurant._id).eq("key", "online_payment"),
+        )
+        .unique(),
+    ]);
+    const activeCategories = categories.filter((category) => category.isActive);
+    const categoryIds = new Set(activeCategories.map((category) => category._id));
+    const menuItems = await Promise.all(
+      items
+        .filter((item) => categoryIds.has(item.categoryId))
+        .map((item) => withImageUrl(ctx, item)),
+    );
+
+    return {
+      restaurant: {
+        _id: restaurant._id,
+        name: restaurant.name,
+        slug: restaurant.slug,
+        description: restaurant.description,
+        logoUrl: logoUrl ?? undefined,
+        address: restaurant.address,
+        phone: restaurant.phone,
+        currency: restaurant.currency,
+      },
+      onlinePaymentEnabled: paymentFlag?.enabled ?? true,
+      categories: activeCategories.map((category) => ({
+        _id: category._id,
+        name: category.name,
+        description: category.description,
+        sortOrder: category.sortOrder,
+      })),
+      menuItems: menuItems.map((item) => ({
+        _id: item._id,
+        categoryId: item.categoryId,
+        name: item.name,
+        description: item.description,
+        price: item.price,
+        imageUrl: item.imageUrl,
+        isVeg: item.isVeg,
+        sortOrder: item.sortOrder,
+        tags: item.tags,
+      })),
+    };
+  },
+});
+
 export const createCategory = mutation({
   args: {
     restaurantId: v.id("restaurants"),

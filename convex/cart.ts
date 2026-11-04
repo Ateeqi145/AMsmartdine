@@ -2,8 +2,12 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { ConvexError } from "convex/values";
 import { recordCustomerAction } from "./lib/staffNotifications";
+import {
+  isTableSessionHost,
+  requireTableSessionHost,
+} from "./lib/tableSessionAccess";
 
-/** Get cart for a session. If shared_cart flag is off, filter by customerId. */
+/** Only the table session host can see its cart. */
 export const getCart = query({
   args: {
     sessionId: v.id("sessions"),
@@ -11,31 +15,25 @@ export const getCart = query({
   },
   handler: async (ctx, args) => {
     const session = await ctx.db.get("sessions", args.sessionId);
-    if (!session) return [];
+    if (
+      !session ||
+      !(await isTableSessionHost(ctx, session, args.customerId))
+    ) {
+      return [];
+    }
 
-    // Check shared_cart feature flag
-    const sharedCartFlag = await ctx.db
-      .query("featureFlags")
-      .withIndex("by_restaurant_key", (q) =>
-        q.eq("restaurantId", session.restaurantId).eq("key", "shared_cart"),
-      )
-      .unique();
-    const isShared = sharedCartFlag?.enabled ?? true;
-
-    let cartItems = await ctx.db
+    const cartItems = await ctx.db
       .query("cartItems")
       .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
       .collect();
 
-    if (!isShared) {
-      cartItems = cartItems.filter((ci) => ci.addedBy === args.customerId);
-    }
-
     return await Promise.all(
-      cartItems.map(async (ci) => {
-        const menuItem = await ctx.db.get("menuItems", ci.menuItemId);
-        return { ...ci, menuItem };
-      }),
+      cartItems
+        .filter((ci) => ci.addedBy === args.customerId)
+        .map(async (ci) => {
+          const menuItem = await ctx.db.get("menuItems", ci.menuItemId);
+          return { ...ci, menuItem };
+        }),
     );
   },
 });
@@ -58,6 +56,7 @@ export const addToCart = mutation({
         code: "BAD_REQUEST",
       });
     }
+    await requireTableSessionHost(ctx, session, args.customerId);
 
     const menuItem = await ctx.db.get("menuItems", args.menuItemId);
     if (
@@ -70,20 +69,12 @@ export const addToCart = mutation({
         code: "BAD_REQUEST",
       });
     }
-    if (args.quantity <= 0) {
+    if (!Number.isInteger(args.quantity) || args.quantity <= 0) {
       throw new ConvexError({
         message: "Quantity must be greater than zero",
         code: "BAD_REQUEST",
       });
     }
-
-    const sharedCartFlag = await ctx.db
-      .query("featureFlags")
-      .withIndex("by_restaurant_key", (q) =>
-        q.eq("restaurantId", session.restaurantId).eq("key", "shared_cart"),
-      )
-      .unique();
-    const isShared = sharedCartFlag?.enabled ?? true;
 
     // Find existing cart entry for this item in this session
     const cartItems = await ctx.db
@@ -92,8 +83,7 @@ export const addToCart = mutation({
       .collect();
     const existing = cartItems.find(
       (ci) =>
-        ci.menuItemId === args.menuItemId &&
-        (isShared || ci.addedBy === args.customerId),
+        ci.menuItemId === args.menuItemId && ci.addedBy === args.customerId,
     );
 
     const now = new Date().toISOString();
@@ -143,16 +133,8 @@ export const updateCartItem = mutation({
         code: "BAD_REQUEST",
       });
     }
-    const sharedCartFlag = await ctx.db
-      .query("featureFlags")
-      .withIndex("by_restaurant_key", (q) =>
-        q.eq("restaurantId", session.restaurantId).eq("key", "shared_cart"),
-      )
-      .unique();
-    if (
-      sharedCartFlag?.enabled === false &&
-      cartItem.addedBy !== args.customerId
-    ) {
+    await requireTableSessionHost(ctx, session, args.customerId);
+    if (cartItem.addedBy !== args.customerId) {
       throw new ConvexError({
         message: "Cart item belongs to another customer",
         code: "FORBIDDEN",
@@ -195,16 +177,8 @@ export const removeFromCart = mutation({
         code: "BAD_REQUEST",
       });
     }
-    const sharedCartFlag = await ctx.db
-      .query("featureFlags")
-      .withIndex("by_restaurant_key", (q) =>
-        q.eq("restaurantId", session.restaurantId).eq("key", "shared_cart"),
-      )
-      .unique();
-    if (
-      sharedCartFlag?.enabled === false &&
-      cartItem.addedBy !== args.customerId
-    ) {
+    await requireTableSessionHost(ctx, session, args.customerId);
+    if (cartItem.addedBy !== args.customerId) {
       throw new ConvexError({
         message: "Cart item belongs to another customer",
         code: "FORBIDDEN",

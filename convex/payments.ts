@@ -12,7 +12,7 @@ import {
   generateRequestId,
 } from "./lib/auth";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { recordCustomerAction } from "./lib/staffNotifications";
 import { closeSessionWhenSettled } from "./lib/sessionLifecycle";
 
@@ -26,6 +26,150 @@ export const _getSession = internalQuery({
 export const _getRestaurant = internalQuery({
   args: { restaurantId: v.id("restaurants") },
   handler: async (ctx, args) => ctx.db.get("restaurants", args.restaurantId),
+});
+
+export const _getDeliveryOrderForPayment = internalQuery({
+  args: {
+    orderId: v.id("orders"),
+    customerId: v.id("users"),
+  },
+  returns: v.union(
+    v.null(),
+    v.object({
+      orderId: v.id("orders"),
+      restaurantId: v.id("restaurants"),
+      amount: v.number(),
+      currency: v.string(),
+      razorpayKeyId: v.optional(v.string()),
+      paymentStatus: v.optional(
+        v.union(
+          v.literal("UNPAID"),
+          v.literal("PENDING"),
+          v.literal("PAID"),
+          v.literal("FAILED"),
+        ),
+      ),
+      deliveryPaymentMethod: v.optional(
+        v.union(v.literal("ONLINE"), v.literal("COD")),
+      ),
+      isCancelled: v.boolean(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const order = await ctx.db.get("orders", args.orderId);
+    if (
+      !order ||
+      order.orderType !== "DELIVERY" ||
+      order.customerUserId !== args.customerId
+    ) {
+      return null;
+    }
+    const restaurant = await ctx.db.get("restaurants", order.restaurantId);
+    if (!restaurant || !restaurant.isActive) return null;
+    return {
+      orderId: order._id,
+      restaurantId: order.restaurantId,
+      amount: order.total,
+      currency: restaurant.currency ?? "INR",
+      razorpayKeyId: restaurant.razorpayKeyId,
+      paymentStatus: order.paymentStatus,
+      deliveryPaymentMethod: order.deliveryPaymentMethod,
+      isCancelled: order.status === "CANCELLED",
+    };
+  },
+});
+
+export const _createDeliveryPaymentRecord = internalMutation({
+  args: {
+    orderId: v.id("orders"),
+    restaurantId: v.id("restaurants"),
+    amount: v.number(),
+    razorpayOrderId: v.string(),
+  },
+  returns: v.id("payments"),
+  handler: async (ctx, args) => {
+    const order = await ctx.db.get("orders", args.orderId);
+    if (
+      !order ||
+      order.status === "CANCELLED" ||
+      order.restaurantId !== args.restaurantId ||
+      order.deliveryPaymentMethod !== "ONLINE" ||
+      order.total !== args.amount ||
+      order.paymentStatus === "PAID"
+    ) {
+      throw new ConvexError({
+        message: "This delivery order is no longer available for payment.",
+        code: "BAD_REQUEST",
+      });
+    }
+    return await ctx.db.insert("payments", {
+      restaurantId: args.restaurantId,
+      orderId: args.orderId,
+      amount: args.amount,
+      method: "UPI",
+      status: "PENDING",
+      razorpayOrderId: args.razorpayOrderId,
+      initiatedAt: new Date().toISOString(),
+      requestId: generateRequestId(),
+    });
+  },
+});
+
+export const _markDeliveryOrderPaid = internalMutation({
+  args: {
+    paymentId: v.id("payments"),
+    orderId: v.id("orders"),
+    customerId: v.id("users"),
+    razorpayOrderId: v.string(),
+    razorpayPaymentId: v.string(),
+    razorpaySignature: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const payment = await ctx.db.get("payments", args.paymentId);
+    const order = await ctx.db.get("orders", args.orderId);
+    if (
+      !payment ||
+      !order ||
+      payment.orderId !== order._id ||
+      payment.restaurantId !== order.restaurantId ||
+      order.customerUserId !== args.customerId ||
+      order.orderType !== "DELIVERY" ||
+      order.deliveryPaymentMethod !== "ONLINE" ||
+      order.status === "CANCELLED"
+    ) {
+      throw new ConvexError({
+        message: "Payment does not belong to this order.",
+        code: "FORBIDDEN",
+      });
+    }
+    if (
+      payment.status !== "PENDING" ||
+      order.paymentStatus === "PAID" ||
+      payment.razorpayOrderId !== args.razorpayOrderId ||
+      payment.amount !== order.total
+    ) {
+      throw new ConvexError({
+        message: "Payment details do not match this order.",
+        code: "BAD_REQUEST",
+      });
+    }
+    const now = new Date().toISOString();
+    await ctx.db.patch("payments", payment._id, {
+      status: "PAID",
+      razorpayPaymentId: args.razorpayPaymentId,
+      razorpaySignature: args.razorpaySignature,
+      completedAt: now,
+    });
+    await ctx.db.patch("orders", order._id, { paymentStatus: "PAID" });
+    await recordCustomerAction(ctx, {
+      restaurantId: order.restaurantId,
+      orderId: order._id,
+      eventType: "ORDER_PLACED",
+      message: `New paid home delivery order received #${order._id.slice(-5).toUpperCase()}.`,
+    });
+    return null;
+  },
 });
 
 export const _getFeatureFlags = internalQuery({
@@ -83,7 +227,8 @@ export const _createPaymentRecord = internalMutation({
     method: v.union(v.literal("UPI"), v.literal("CARD"), v.literal("CASH")),
     razorpayOrderId: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<string> => {
+  returns: v.id("payments"),
+  handler: async (ctx, args) => {
     const id = await ctx.db.insert("payments", {
       restaurantId: args.restaurantId,
       sessionId: args.sessionId,
@@ -117,6 +262,12 @@ export const _markPaymentPaid = internalMutation({
     if (payment.status !== "PENDING") {
       throw new ConvexError({
         message: "Payment has already been processed",
+        code: "BAD_REQUEST",
+      });
+    }
+    if (!payment.sessionId) {
+      throw new ConvexError({
+        message: "This payment is not associated with a table session.",
         code: "BAD_REQUEST",
       });
     }
@@ -229,8 +380,7 @@ export const getBillSummary = query({
     session: Doc<"sessions">;
     table: Doc<"tables"> | null;
     restaurant:
-      | (Doc<"restaurants"> & { paymentQrUrl?: string | undefined })
-      | null;
+      (Doc<"restaurants"> & { paymentQrUrl?: string | undefined }) | null;
     onlinePaymentEnabled: boolean;
     feedbackEnabled: boolean;
     orders: Doc<"orders">[];
@@ -257,47 +407,48 @@ export const getBillSummary = query({
       onlinePaymentFlag,
       feedbackFlag,
     ] = await Promise.all([
-        ctx.db.get("tables", session.tableId),
-        ctx.db.get("restaurants", session.restaurantId),
-        ctx.db
-          .query("orders")
-          .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
-          .collect(),
-        ctx.db
-          .query("payments")
-          .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
-          .collect(),
-        ctx.db
-          .query("waiterRequests")
-          .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
-          .collect(),
-        ctx.db
-          .query("featureFlags")
-          .withIndex("by_restaurant_key", (q) =>
-            q
-              .eq("restaurantId", session.restaurantId)
-              .eq("key", "online_payment"),
-          )
-          .unique(),
-        ctx.db
-          .query("featureFlags")
-          .withIndex("by_restaurant_key", (q) =>
-            q.eq("restaurantId", session.restaurantId).eq("key", "feedback"),
-          )
-          .unique(),
-      ]);
+      ctx.db.get("tables", session.tableId),
+      ctx.db.get("restaurants", session.restaurantId),
+      ctx.db
+        .query("orders")
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .collect(),
+      ctx.db
+        .query("payments")
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .collect(),
+      ctx.db
+        .query("waiterRequests")
+        .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
+        .collect(),
+      ctx.db
+        .query("featureFlags")
+        .withIndex("by_restaurant_key", (q) =>
+          q
+            .eq("restaurantId", session.restaurantId)
+            .eq("key", "online_payment"),
+        )
+        .unique(),
+      ctx.db
+        .query("featureFlags")
+        .withIndex("by_restaurant_key", (q) =>
+          q.eq("restaurantId", session.restaurantId).eq("key", "feedback"),
+        )
+        .unique(),
+    ]);
     const onlinePaymentEnabled = onlinePaymentFlag?.enabled ?? true;
     const feedbackEnabled = feedbackFlag?.enabled ?? true;
     const restaurant = restaurantRecord
       ? {
           ...restaurantRecord,
           logoUrl: restaurantRecord.logoStorageId
-            ? (await ctx.storage.getUrl(restaurantRecord.logoStorageId)) ??
-              undefined
+            ? ((await ctx.storage.getUrl(restaurantRecord.logoStorageId)) ??
+              undefined)
             : restaurantRecord.logoUrl,
           paymentQrUrl: restaurantRecord.paymentQrStorageId
-            ? (await ctx.storage.getUrl(restaurantRecord.paymentQrStorageId)) ??
-              undefined
+            ? ((await ctx.storage.getUrl(
+                restaurantRecord.paymentQrStorageId,
+              )) ?? undefined)
             : undefined,
         }
       : null;
@@ -588,11 +739,18 @@ export const initiateOnlinePayment = action({
     amountPaise: v.number(),
     method: v.union(v.literal("UPI"), v.literal("CARD")),
   },
+  returns: v.object({
+    paymentId: v.id("payments"),
+    razorpayOrderId: v.string(),
+    keyId: v.string(),
+    amount: v.number(),
+    currency: v.string(),
+  }),
   handler: async (
     ctx,
     args,
   ): Promise<{
-    paymentId: string;
+    paymentId: Id<"payments">;
     razorpayOrderId: string;
     keyId: string;
     amount: number;
@@ -690,7 +848,8 @@ export const confirmOnlinePayment = action({
     razorpaySignature: v.string(),
     method: v.union(v.literal("UPI"), v.literal("CARD")),
   },
-  handler: async (ctx, args): Promise<void> => {
+  returns: v.null(),
+  handler: async (ctx, args) => {
     // Verify HMAC signature — throws if invalid
     await ctx.runAction(internal.razorpay.verifySignature, {
       razorpayOrderId: args.razorpayOrderId,
@@ -705,5 +864,142 @@ export const confirmOnlinePayment = action({
       razorpaySignature: args.razorpaySignature,
       method: args.method,
     });
+    return null;
+  },
+});
+
+/** Create a server-priced Razorpay order for an authenticated delivery order. */
+export const initiateDeliveryPayment = action({
+  args: { orderId: v.id("orders") },
+  returns: v.object({
+    paymentId: v.id("payments"),
+    razorpayOrderId: v.string(),
+    keyId: v.string(),
+    amount: v.number(),
+    currency: v.string(),
+  }),
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    paymentId: Id<"payments">;
+    razorpayOrderId: string;
+    keyId: string;
+    amount: number;
+    currency: string;
+  }> => {
+    const customerId: Id<"users"> | null = await ctx.runQuery(
+      internal.customers.getCurrentCustomerId,
+      {},
+    );
+    if (!customerId) {
+      throw new ConvexError({
+        message: "Sign in to pay for this order.",
+        code: "UNAUTHENTICATED",
+      });
+    }
+    const order = await ctx.runQuery(
+      internal.payments._getDeliveryOrderForPayment,
+      { orderId: args.orderId, customerId },
+    );
+    if (!order) {
+      throw new ConvexError({
+        message: "Delivery order not found.",
+        code: "NOT_FOUND",
+      });
+    }
+    if (order.deliveryPaymentMethod !== "ONLINE") {
+      throw new ConvexError({
+        message: "This order is not configured for online payment.",
+        code: "BAD_REQUEST",
+      });
+    }
+    if (order.isCancelled) {
+      throw new ConvexError({
+        message: "This delivery order has been cancelled.",
+        code: "BAD_REQUEST",
+      });
+    }
+    if (order.paymentStatus === "PAID") {
+      throw new ConvexError({
+        message: "This order has already been paid.",
+        code: "BAD_REQUEST",
+      });
+    }
+    const flags = await ctx.runQuery(internal.payments._getFeatureFlags, {
+      restaurantId: order.restaurantId,
+    });
+    if (!(
+      flags.find((flag) => flag.key === "online_payment")?.enabled ?? true
+    )) {
+      throw new ConvexError({
+        message: "Online payment is not enabled for this restaurant.",
+        code: "FORBIDDEN",
+      });
+    }
+
+    const razorpayOrder = await ctx.runAction(
+      internal.razorpay.createRazorpayOrder,
+      {
+        amountPaise: order.amount,
+        currency: order.currency,
+        receiptId: args.orderId.slice(-20),
+        razorpayKeyId: order.razorpayKeyId,
+      },
+    );
+    const paymentId = await ctx.runMutation(
+      internal.payments._createDeliveryPaymentRecord,
+      {
+        orderId: order.orderId,
+        restaurantId: order.restaurantId,
+        amount: order.amount,
+        razorpayOrderId: razorpayOrder.razorpayOrderId,
+      },
+    );
+    return {
+      paymentId,
+      razorpayOrderId: razorpayOrder.razorpayOrderId,
+      keyId: razorpayOrder.keyId,
+      amount: razorpayOrder.amount,
+      currency: razorpayOrder.currency,
+    };
+  },
+});
+
+/** Verify the Razorpay signature and attach the resulting payment to its owner order. */
+export const confirmDeliveryPayment = action({
+  args: {
+    paymentId: v.id("payments"),
+    orderId: v.id("orders"),
+    razorpayOrderId: v.string(),
+    razorpayPaymentId: v.string(),
+    razorpaySignature: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const customerId: Id<"users"> | null = await ctx.runQuery(
+      internal.customers.getCurrentCustomerId,
+      {},
+    );
+    if (!customerId) {
+      throw new ConvexError({
+        message: "Sign in to confirm this payment.",
+        code: "UNAUTHENTICATED",
+      });
+    }
+    await ctx.runAction(internal.razorpay.verifySignature, {
+      razorpayOrderId: args.razorpayOrderId,
+      razorpayPaymentId: args.razorpayPaymentId,
+      razorpaySignature: args.razorpaySignature,
+    });
+    await ctx.runMutation(internal.payments._markDeliveryOrderPaid, {
+      paymentId: args.paymentId,
+      orderId: args.orderId,
+      customerId,
+      razorpayOrderId: args.razorpayOrderId,
+      razorpayPaymentId: args.razorpayPaymentId,
+      razorpaySignature: args.razorpaySignature,
+    });
+    return null;
   },
 });

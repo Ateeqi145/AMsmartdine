@@ -6,17 +6,6 @@ import {
   requireRestaurantManager,
   generateRequestId,
 } from "./lib/auth";
-import type { Id } from "./_generated/dataModel";
-
-const FEATURE_KEYS = [
-  "shared_cart",
-  "online_payment",
-  "call_waiter",
-  "feedback",
-  "partial_payment",
-] as const;
-
-type FeatureKey = (typeof FEATURE_KEYS)[number];
 
 /** Get all feature flags for a restaurant */
 export const listByRestaurant = query({
@@ -25,7 +14,9 @@ export const listByRestaurant = query({
     await requireRestaurantAccess(ctx, args.restaurantId);
     return await ctx.db
       .query("featureFlags")
-      .withIndex("by_restaurant", (q) => q.eq("restaurantId", args.restaurantId))
+      .withIndex("by_restaurant", (q) =>
+        q.eq("restaurantId", args.restaurantId),
+      )
       .collect();
   },
 });
@@ -36,7 +27,9 @@ export const listPublic = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("featureFlags")
-      .withIndex("by_restaurant", (q) => q.eq("restaurantId", args.restaurantId))
+      .withIndex("by_restaurant", (q) =>
+        q.eq("restaurantId", args.restaurantId),
+      )
       .collect();
   },
 });
@@ -46,11 +39,12 @@ export const setFlag = mutation({
   args: {
     restaurantId: v.id("restaurants"),
     key: v.union(
-      v.literal("shared_cart"),
+      v.literal("occupied_menu_access"),
       v.literal("online_payment"),
       v.literal("call_waiter"),
       v.literal("feedback"),
       v.literal("partial_payment"),
+      v.literal("online_ordering"),
     ),
     enabled: v.boolean(),
   },
@@ -99,9 +93,10 @@ export const setManagerFlag = mutation({
   args: {
     restaurantId: v.id("restaurants"),
     key: v.union(
-      v.literal("shared_cart"),
+      v.literal("occupied_menu_access"),
       v.literal("online_payment"),
       v.literal("feedback"),
+      v.literal("online_ordering"),
     ),
     enabled: v.boolean(),
   },
@@ -153,11 +148,12 @@ export const bulkSetFlags = mutation({
     flags: v.array(
       v.object({
         key: v.union(
-          v.literal("shared_cart"),
+          v.literal("occupied_menu_access"),
           v.literal("online_payment"),
           v.literal("call_waiter"),
           v.literal("feedback"),
           v.literal("partial_payment"),
+          v.literal("online_ordering"),
         ),
         enabled: v.boolean(),
       }),

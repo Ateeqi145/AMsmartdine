@@ -163,8 +163,8 @@ export const listRecentCustomerActions = query({
       _id: v.id("staffNotifications"),
       _creationTime: v.number(),
       restaurantId: v.id("restaurants"),
-      sessionId: v.id("sessions"),
-      tableId: v.id("tables"),
+      sessionId: v.optional(v.id("sessions")),
+      tableId: v.optional(v.id("tables")),
       eventType: v.union(
         v.literal("TABLE_SESSION_OPENED"),
         v.literal("CART_CHANGED"),
@@ -194,10 +194,15 @@ export const listRecentCustomerActions = query({
       .take(50);
     return await Promise.all(
       notifications.map(async (notification) => {
-        const table = await ctx.db.get("tables", notification.tableId);
+        const table = notification.tableId
+          ? await ctx.db.get("tables", notification.tableId)
+          : null;
         return {
           ...notification,
-          tableDisplayName: table?.displayName ?? table?.tableNumber ?? "Table",
+          tableDisplayName:
+            notification.orderId && !notification.tableId
+              ? `Home delivery · #${notification.orderId.slice(-5).toUpperCase()}`
+              : (table?.displayName ?? table?.tableNumber ?? "Table"),
         };
       }),
     );

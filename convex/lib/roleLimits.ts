@@ -6,7 +6,11 @@ export async function assertRoleSlotAvailable(
   ctx: MutationCtx,
   args: {
     userId: Id<"users">;
-    role: "SUPER_ADMIN" | "RESTAURANT_MANAGER" | "RESTAURANT_STAFF";
+    role:
+      | "SUPER_ADMIN"
+      | "RESTAURANT_MANAGER"
+      | "RESTAURANT_STAFF"
+      | "DELIVERY_PERSON";
     restaurantId?: Id<"restaurants">;
   },
 ) {

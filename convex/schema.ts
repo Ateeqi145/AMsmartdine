@@ -7,15 +7,20 @@ const role = v.union(
   v.literal("SUPER_ADMIN"),
   v.literal("RESTAURANT_MANAGER"),
   v.literal("RESTAURANT_STAFF"),
+  v.literal("DELIVERY_PERSON"),
+  v.literal("CUSTOMER"),
 );
 
 // ─── Feature flag keys ────────────────────────────────────────────
 const featureFlagKey = v.union(
+  // Retained only so existing stored flags remain schema-valid.
   v.literal("shared_cart"),
+  v.literal("occupied_menu_access"),
   v.literal("online_payment"),
   v.literal("call_waiter"),
   v.literal("feedback"),
   v.literal("partial_payment"),
+  v.literal("online_ordering"),
 );
 
 // ─── Order/session statuses ───────────────────────────────────────
@@ -24,6 +29,7 @@ const orderStatus = v.union(
   v.literal("CONFIRMED"),
   v.literal("PREPARING"),
   v.literal("READY"),
+  v.literal("OUT_FOR_DELIVERY"),
   v.literal("DELIVERED"),
   v.literal("CANCELLED"),
 );
@@ -67,6 +73,7 @@ export default defineSchema({
   })
     .index("email", ["email"])
     .index("by_token", ["tokenIdentifier"])
+    .index("by_phone", ["phone"])
     .index("by_restaurant", ["restaurantId"])
     .index("by_role", ["role"])
     .index("by_role_and_restaurant", ["role", "restaurantId"]),
@@ -91,8 +98,13 @@ export default defineSchema({
     isActive: v.boolean(),
     createdAt: v.string(),
     updatedAt: v.string(),
+    deliveryFeePaise: v.optional(v.number()),
+    deliveryTaxRatePercent: v.optional(v.number()),
+    deliveryDiscountPaise: v.optional(v.number()),
+    deliveryEnabledBySuperAdmin: v.optional(v.boolean()),
     // Razorpay config
     razorpayKeyId: v.optional(v.string()),
+    upiId: v.optional(v.string()),
     // Managed by super admin
     createdBy: v.optional(v.id("users")),
   })
@@ -165,6 +177,7 @@ export default defineSchema({
     customerCount: v.number(),
     dailyCustomerCount: v.optional(v.number()), // running total for the day
     openedAt: v.string(),
+    hostCustomerId: v.optional(v.string()),
     closedAt: v.optional(v.string()),
     // Billing
     totalAmount: v.optional(v.number()),
@@ -178,14 +191,27 @@ export default defineSchema({
     .index("by_table_status", ["tableId", "status"])
     .index("by_restaurant_status", ["restaurantId", "status"]),
 
-  // ── Customer devices joined to a session ─────────────────────────
+  // ── Session host and legacy visitor records ───────────────────────
   sessionVisitors: defineTable({
     sessionId: v.id("sessions"),
     customerId: v.string(),
     joinedAt: v.string(),
   }).index("by_session_and_customer", ["sessionId", "customerId"]),
 
-  // ── Cart items (shared realtime cart per session) ─────────────────
+  // ── Saved customer delivery addresses ────────────────────────────
+  deliveryAddresses: defineTable({
+    userId: v.id("users"),
+    name: v.string(),
+    phone: v.string(),
+    street: v.string(),
+    area: v.string(),
+    city: v.string(),
+    pincode: v.string(),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  }).index("by_user", ["userId"]),
+
+  // ── Host-owned cart items per table session ────────────────────────
   cartItems: defineTable({
     restaurantId: v.id("restaurants"),
     sessionId: v.id("sessions"),
@@ -202,10 +228,39 @@ export default defineSchema({
   // ── Orders ────────────────────────────────────────────────────────
   orders: defineTable({
     restaurantId: v.id("restaurants"),
-    sessionId: v.id("sessions"),
-    tableId: v.id("tables"),
+    sessionId: v.optional(v.id("sessions")),
+    tableId: v.optional(v.id("tables")),
+    orderType: v.optional(
+      v.union(
+        v.literal("DINE_IN"),
+        v.literal("DELIVERY"),
+        v.literal("TAKEAWAY"),
+      ),
+    ),
     status: orderStatus,
     customerId: v.optional(v.string()),
+    customerUserId: v.optional(v.id("users")),
+    paymentStatus: v.optional(
+      v.union(
+        v.literal("UNPAID"),
+        v.literal("PENDING"),
+        v.literal("PAID"),
+        v.literal("FAILED"),
+      ),
+    ),
+    deliveryPaymentMethod: v.optional(
+      v.union(v.literal("ONLINE"), v.literal("COD")),
+    ),
+    deliveryAddress: v.optional(
+      v.object({
+        name: v.string(),
+        phone: v.string(),
+        street: v.string(),
+        area: v.string(),
+        city: v.string(),
+        pincode: v.string(),
+      }),
+    ),
     items: v.array(
       v.object({
         menuItemId: v.id("menuItems"),
@@ -217,12 +272,24 @@ export default defineSchema({
     ),
     subtotal: v.number(),
     tax: v.optional(v.number()),
+    deliveryCharge: v.optional(v.number()),
+    discount: v.optional(v.number()),
     total: v.number(),
     placedAt: v.string(),
     confirmedAt: v.optional(v.string()),
     preparingAt: v.optional(v.string()),
     readyAt: v.optional(v.string()),
+    outForDeliveryAt: v.optional(v.string()),
     deliveredAt: v.optional(v.string()),
+    deliveryTrackingTokenHash: v.optional(v.string()),
+    deliveryPersonId: v.optional(v.id("users")),
+    deliveryPinHash: v.optional(v.string()),
+    deliveryPinCiphertext: v.optional(v.string()),
+    deliveryPinExpiresAt: v.optional(v.number()),
+    deliveryPinFailedAttempts: v.optional(v.number()),
+    deliveryPinLockedUntil: v.optional(v.number()),
+    deliveryConfirmedAt: v.optional(v.string()),
+    deliveredBy: v.optional(v.id("users")),
     cancelledAt: v.optional(v.string()),
     cancellationDeadline: v.optional(v.string()), // 3-min window
     cancelledBy: v.optional(v.string()),
@@ -234,12 +301,33 @@ export default defineSchema({
     .index("by_session", ["sessionId"])
     .index("by_session_and_status", ["sessionId", "status"])
     .index("by_table", ["tableId"])
-    .index("by_restaurant_status", ["restaurantId", "status"]),
+    .index("by_restaurant_status", ["restaurantId", "status"])
+    .index("by_customer", ["customerUserId"])
+    .index("by_delivery_person", ["deliveryPersonId"]),
+
+  deliveryHandoverAudits: defineTable({
+    orderId: v.id("orders"),
+    restaurantId: v.id("restaurants"),
+    deliveryPersonId: v.id("users"),
+    confirmedAt: v.string(),
+  })
+    .index("by_order", ["orderId"])
+    .index("by_restaurant", ["restaurantId"]),
+
+  deliverySecurityAlerts: defineTable({
+    restaurantId: v.id("restaurants"),
+    orderId: v.id("orders"),
+    deliveryPersonId: v.id("users"),
+    eventType: v.literal("DELIVERY_PIN_LOCKED"),
+    message: v.string(),
+    createdAt: v.string(),
+  }).index("by_restaurant_and_created_at", ["restaurantId", "createdAt"]),
 
   // ── Payments ──────────────────────────────────────────────────────
   payments: defineTable({
     restaurantId: v.id("restaurants"),
-    sessionId: v.id("sessions"),
+    sessionId: v.optional(v.id("sessions")),
+    orderId: v.optional(v.id("orders")),
     amount: v.number(),
     method: paymentMethod,
     status: paymentStatus,
@@ -301,8 +389,8 @@ export default defineSchema({
   // ── Recent customer actions shown to staff ───────────────────────
   staffNotifications: defineTable({
     restaurantId: v.id("restaurants"),
-    sessionId: v.id("sessions"),
-    tableId: v.id("tables"),
+    sessionId: v.optional(v.id("sessions")),
+    tableId: v.optional(v.id("tables")),
     eventType: v.union(
       v.literal("TABLE_SESSION_OPENED"),
       v.literal("CART_CHANGED"),

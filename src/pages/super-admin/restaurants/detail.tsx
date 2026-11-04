@@ -6,31 +6,100 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Skeleton } from "@/components/ui/skeleton.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Badge } from "@/components/ui/badge.tsx";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card.tsx";
 import { Switch } from "@/components/ui/switch.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select.tsx";
 import { toast } from "sonner";
 import { getUserFacingErrorMessage } from "@/lib/error-catalog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs.tsx";
 import {
-  ArrowLeft, Store, Users, Settings, ToggleLeft, Pencil,
-  UserPlus, CheckCircle, XCircle, ShieldCheck, ShieldAlert,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs.tsx";
+import {
+  ArrowLeft,
+  Store,
+  Users,
+  Settings,
+  ToggleLeft,
+  Pencil,
+  UserPlus,
+  CheckCircle,
+  XCircle,
+  ShieldCheck,
+  ShieldAlert,
 } from "lucide-react";
 
-const FEATURE_LABELS: Record<string, { label: string; description: string; icon: string }> = {
-  shared_cart: { label: "Shared Cart", description: "All customers at a table share one cart in real-time", icon: "🛒" },
-  online_payment: { label: "Online Payment", description: "UPI and card payments via Razorpay", icon: "💳" },
-  call_waiter: { label: "Call Waiter", description: "Customers can call the waiter from the app", icon: "🔔" },
-  feedback: { label: "Customer Feedback", description: "Post-meal ratings and comments", icon: "⭐" },
-  partial_payment: { label: "Partial Payment", description: "Split bill across multiple payments", icon: "💰" },
+type FeatureFlagKey =
+  | "occupied_menu_access"
+  | "online_payment"
+  | "call_waiter"
+  | "feedback"
+  | "partial_payment"
+  | "online_ordering";
+
+const FEATURE_LABELS: Record<
+  FeatureFlagKey,
+  { label: string; description: string; icon: string }
+> = {
+  occupied_menu_access: {
+    label: "Menu access at occupied tables",
+    description:
+      "Allow table guests to browse the menu while the session host controls ordering",
+    icon: "👁️",
+  },
+  online_payment: {
+    label: "Online Payment",
+    description: "UPI and card payments via Razorpay",
+    icon: "💳",
+  },
+  call_waiter: {
+    label: "Call Waiter",
+    description: "Customers can call the waiter from the app",
+    icon: "🔔",
+  },
+  feedback: {
+    label: "Customer Feedback",
+    description: "Post-meal ratings and comments",
+    icon: "⭐",
+  },
+  partial_payment: {
+    label: "Partial Payment",
+    description: "Split bill across multiple payments",
+    icon: "💰",
+  },
+  online_ordering: {
+    label: "Manager delivery preference",
+    description: "Manager-level preference for public home delivery ordering",
+    icon: "🚚",
+  },
 };
 
 const ROLE_LABELS: Record<string, string> = {
   RESTAURANT_MANAGER: "Manager",
   RESTAURANT_STAFF: "Staff",
+  DELIVERY_PERSON: "Delivery Person",
   SUPER_ADMIN: "Super Admin",
 };
 
@@ -40,7 +109,15 @@ function EditRestaurantDialog({
   open,
   onClose,
 }: {
-  restaurant: { _id: string; name: string; slug: string; description?: string; address?: string; phone?: string; email?: string };
+  restaurant: {
+    _id: string;
+    name: string;
+    slug: string;
+    description?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  };
   open: boolean;
   onClose: () => void;
 }) {
@@ -58,7 +135,10 @@ function EditRestaurantDialog({
     e.preventDefault();
     setLoading(true);
     try {
-      await update({ restaurantId: restaurant._id as Id<"restaurants">, ...form });
+      await update({
+        restaurantId: restaurant._id as Id<"restaurants">,
+        ...form,
+      });
       toast.success("Restaurant updated");
       onClose();
     } catch {
@@ -77,29 +157,60 @@ function EditRestaurantDialog({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <Label>Restaurant Name</Label>
-            <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <Input
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Description</Label>
-            <Input value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="Short description..." />
+            <Input
+              value={form.description}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, description: e.target.value }))
+              }
+              placeholder="Short description..."
+            />
           </div>
           <div className="space-y-1.5">
             <Label>Address</Label>
-            <Input value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} placeholder="123 Main St, City" />
+            <Input
+              value={form.address}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, address: e.target.value }))
+              }
+              placeholder="123 Main St, City"
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Phone</Label>
-              <Input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+91 98765 43210" />
+              <Input
+                value={form.phone}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, phone: e.target.value }))
+                }
+                placeholder="+91 98765 43210"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Email</Label>
-              <Input value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="info@restaurant.com" />
+              <Input
+                value={form.email}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, email: e.target.value }))
+                }
+                placeholder="info@restaurant.com"
+              />
             </div>
           </div>
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? "Saving..." : "Save Changes"}</Button>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={loading}>
+              {loading ? "Saving..." : "Save Changes"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -120,7 +231,9 @@ function AssignStaffDialog({
   const allUsers = useQuery(api.admin.listAllUsers, {});
   const assignRole = useMutation(api.admin.assignUserRole);
   const [selectedUser, setSelectedUser] = useState("");
-  const [selectedRole, setSelectedRole] = useState<"RESTAURANT_MANAGER" | "RESTAURANT_STAFF">("RESTAURANT_STAFF");
+  const [selectedRole, setSelectedRole] = useState<
+    "RESTAURANT_MANAGER" | "RESTAURANT_STAFF" | "DELIVERY_PERSON"
+  >("RESTAURANT_STAFF");
   const [loading, setLoading] = useState(false);
 
   // Only show users who are not already assigned to this restaurant
@@ -129,7 +242,10 @@ function AssignStaffDialog({
   );
 
   const handleAssign = async () => {
-    if (!selectedUser) { toast.error("Select a user"); return; }
+    if (!selectedUser) {
+      toast.error("Select a user");
+      return;
+    }
     setLoading(true);
     try {
       await assignRole({
@@ -163,9 +279,13 @@ function AssignStaffDialog({
               </SelectTrigger>
               <SelectContent>
                 {allUsers === undefined ? (
-                  <SelectItem value="loading" disabled>Loading...</SelectItem>
+                  <SelectItem value="loading" disabled>
+                    Loading...
+                  </SelectItem>
                 ) : eligibleUsers.length === 0 ? (
-                  <SelectItem value="none" disabled>No eligible users</SelectItem>
+                  <SelectItem value="none" disabled>
+                    No eligible users
+                  </SelectItem>
                 ) : (
                   eligibleUsers.map((u) => (
                     <SelectItem key={u._id} value={u._id}>
@@ -178,19 +298,31 @@ function AssignStaffDialog({
           </div>
           <div className="space-y-1.5">
             <Label>Role</Label>
-            <Select value={selectedRole} onValueChange={(v) => setSelectedRole(v as typeof selectedRole)}>
+            <Select
+              value={selectedRole}
+              onValueChange={(v) => setSelectedRole(v as typeof selectedRole)}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="RESTAURANT_MANAGER">Manager — full restaurant control</SelectItem>
-                <SelectItem value="RESTAURANT_STAFF">Staff — operational access only</SelectItem>
+                <SelectItem value="RESTAURANT_MANAGER">
+                  Manager — full restaurant control
+                </SelectItem>
+                <SelectItem value="RESTAURANT_STAFF">
+                  Staff — operational access only
+                </SelectItem>
+                <SelectItem value="DELIVERY_PERSON">
+                  Delivery Person — assigned deliveries only
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
           <Button onClick={handleAssign} disabled={loading || !selectedUser}>
             {loading ? "Assigning..." : "Assign"}
           </Button>
@@ -209,24 +341,61 @@ export default function SuperAdminRestaurantDetail() {
 
   const rid = restaurantId as Id<"restaurants"> | undefined;
 
-  const restaurant = useQuery(api.restaurants.get, rid ? { restaurantId: rid } : "skip");
-  const flags = useQuery(api.featureFlags.listByRestaurant, rid ? { restaurantId: rid } : "skip");
-  const staff = useQuery(api.users.listByRestaurant, rid ? { restaurantId: rid } : "skip");
-  const auditLogs = useQuery(api.admin.list, rid ? { restaurantId: rid, limit: 20 } : "skip");
+  const restaurant = useQuery(
+    api.restaurants.get,
+    rid ? { restaurantId: rid } : "skip",
+  );
+  const flags = useQuery(
+    api.featureFlags.listByRestaurant,
+    rid ? { restaurantId: rid } : "skip",
+  );
+  const staff = useQuery(
+    api.users.listByRestaurant,
+    rid ? { restaurantId: rid } : "skip",
+  );
+  const auditLogs = useQuery(
+    api.admin.list,
+    rid ? { restaurantId: rid, limit: 20 } : "skip",
+  );
 
   const setFlag = useMutation(api.featureFlags.setFlag);
+  const setDeliveryOverride = useMutation(api.restaurants.setDeliveryOverride);
   const setActive = useMutation(api.restaurants.setActive);
   const setUserActive = useMutation(api.admin.setUserActive);
 
-  const flagMap = Object.fromEntries((flags ?? []).map((f) => [f.key, f.enabled]));
+  const flagMap = Object.fromEntries(
+    (flags ?? []).map((f) => [f.key, f.enabled]),
+  );
 
-  const handleToggleFlag = async (key: string, enabled: boolean) => {
+  const handleToggleFlag = async (key: FeatureFlagKey, enabled: boolean) => {
     if (!rid) return;
     try {
-      await setFlag({ restaurantId: rid, key: key as "shared_cart", enabled });
-      toast.success(`${FEATURE_LABELS[key]?.label ?? key} ${enabled ? "enabled" : "disabled"}`);
+      await setFlag({ restaurantId: rid, key, enabled });
+      toast.success(
+        `${FEATURE_LABELS[key]?.label ?? key} ${enabled ? "enabled" : "disabled"}`,
+      );
     } catch {
       toast.error("Failed to update feature flag");
+    }
+  };
+
+  const handleDeliveryOverride = async (value: string) => {
+    if (!rid) return;
+    const enabled = value === "manager" ? null : value === "enabled";
+    try {
+      await setDeliveryOverride({ restaurantId: rid, enabled });
+      toast.success(
+        value === "manager"
+          ? "Delivery is now controlled by the restaurant manager."
+          : `Home delivery ${enabled ? "enabled" : "disabled"} by Super Admin.`,
+      );
+    } catch (error) {
+      toast.error(
+        getUserFacingErrorMessage(
+          error,
+          "Could not update the delivery override.",
+        ),
+      );
     }
   };
 
@@ -234,7 +403,9 @@ export default function SuperAdminRestaurantDetail() {
     if (!rid || !restaurant) return;
     try {
       await setActive({ restaurantId: rid, isActive: !restaurant.isActive });
-      toast.success(restaurant.isActive ? "Restaurant deactivated" : "Restaurant activated");
+      toast.success(
+        restaurant.isActive ? "Restaurant deactivated" : "Restaurant activated",
+      );
     } catch {
       toast.error("Failed to update restaurant status");
     }
@@ -261,7 +432,12 @@ export default function SuperAdminRestaurantDetail() {
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       {/* Back */}
-      <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="gap-1 -ml-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => navigate(-1)}
+        className="gap-1 -ml-1"
+      >
         <ArrowLeft className="w-4 h-4" />
         Restaurants
       </Button>
@@ -275,14 +451,20 @@ export default function SuperAdminRestaurantDetail() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-xl font-bold truncate">{restaurant.name}</h1>
+                <h1 className="text-xl font-bold truncate">
+                  {restaurant.name}
+                </h1>
                 <Badge variant={restaurant.isActive ? "default" : "secondary"}>
                   {restaurant.isActive ? "Active" : "Inactive"}
                 </Badge>
               </div>
-              <p className="text-sm text-muted-foreground font-mono mt-0.5">/{restaurant.slug}</p>
+              <p className="text-sm text-muted-foreground font-mono mt-0.5">
+                /{restaurant.slug}
+              </p>
               {restaurant.description && (
-                <p className="text-sm text-muted-foreground mt-1.5">{restaurant.description}</p>
+                <p className="text-sm text-muted-foreground mt-1.5">
+                  {restaurant.description}
+                </p>
               )}
               <div className="flex flex-wrap gap-4 mt-2 text-sm text-muted-foreground">
                 {restaurant.address && <span>{restaurant.address}</span>}
@@ -291,20 +473,35 @@ export default function SuperAdminRestaurantDetail() {
               </div>
             </div>
             <div className="flex flex-col gap-2 flex-shrink-0">
-              <Button size="sm" variant="ghost" className="gap-1.5" onClick={() => setEditOpen(true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gap-1.5"
+                onClick={() => setEditOpen(true)}
+              >
                 <Pencil className="w-3.5 h-3.5" />
                 Edit
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                className={restaurant.isActive ? "gap-1.5 text-destructive hover:text-destructive" : "gap-1.5 text-green-600"}
+                className={
+                  restaurant.isActive
+                    ? "gap-1.5 text-destructive hover:text-destructive"
+                    : "gap-1.5 text-green-600"
+                }
                 onClick={handleToggleActive}
               >
                 {restaurant.isActive ? (
-                  <><XCircle className="w-3.5 h-3.5" />Deactivate</>
+                  <>
+                    <XCircle className="w-3.5 h-3.5" />
+                    Deactivate
+                  </>
                 ) : (
-                  <><CheckCircle className="w-3.5 h-3.5" />Activate</>
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    Activate
+                  </>
                 )}
               </Button>
             </div>
@@ -331,43 +528,110 @@ export default function SuperAdminRestaurantDetail() {
 
         {/* ── Feature Flags ── */}
         <TabsContent value="features" className="mt-4">
+          <Card className="mb-4">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold">
+                Home delivery availability
+              </CardTitle>
+              <p className="text-xs text-muted-foreground">
+                A Super Admin setting takes priority over the manager's
+                restaurant setting. Choose Manager controlled to remove the
+                override.
+              </p>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">
+                  Effective status:{" "}
+                  {(restaurant.deliveryEnabledBySuperAdmin ??
+                  flagMap.online_ordering ??
+                  true)
+                    ? "Enabled"
+                    : "Disabled"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {restaurant.deliveryEnabledBySuperAdmin === undefined
+                    ? "The restaurant manager controls availability."
+                    : "The Super Admin override is active."}
+                </p>
+              </div>
+              <Select
+                value={
+                  restaurant.deliveryEnabledBySuperAdmin === undefined
+                    ? "manager"
+                    : restaurant.deliveryEnabledBySuperAdmin
+                      ? "enabled"
+                      : "disabled"
+                }
+                onValueChange={(value) => void handleDeliveryOverride(value)}
+              >
+                <SelectTrigger className="w-full sm:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manager">Manager controlled</SelectItem>
+                  <SelectItem value="enabled">
+                    Enabled by Super Admin
+                  </SelectItem>
+                  <SelectItem value="disabled">
+                    Disabled by Super Admin
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </CardContent>
+          </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold">Feature Configuration</CardTitle>
+              <CardTitle className="text-sm font-semibold">
+                Feature Configuration
+              </CardTitle>
               <p className="text-xs text-muted-foreground">
-                Toggle features for this restaurant. Changes take effect server-side immediately.
+                Toggle features for this restaurant. Changes take effect
+                server-side immediately.
               </p>
             </CardHeader>
             <CardContent className="space-y-3">
-              {flags === undefined ? (
-                [...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 w-full" />)
-              ) : (
-                Object.entries(FEATURE_LABELS).map(([key, { label, description, icon }]) => (
-                  <div
-                    key={key}
-                    className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
-                      flagMap[key] ? "bg-primary/5 border-primary/20" : "bg-muted/30 border-border"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{icon}</span>
-                      <div>
-                        <p className="text-sm font-medium">{label}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+              {flags === undefined
+                ? [...Array(5)].map((_, i) => (
+                    <Skeleton key={i} className="h-16 w-full" />
+                  ))
+                : Object.entries(FEATURE_LABELS).map(
+                    ([key, { label, description, icon }]) => (
+                      <div
+                        key={key}
+                        className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
+                          flagMap[key]
+                            ? "bg-primary/5 border-primary/20"
+                            : "bg-muted/30 border-border"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-xl">{icon}</span>
+                          <div>
+                            <p className="text-sm font-medium">{label}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              {description}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`text-xs font-medium ${flagMap[key] ? "text-primary" : "text-muted-foreground"}`}
+                          >
+                            {flagMap[key] ? "ON" : "OFF"}
+                          </span>
+                          <Switch
+                            checked={
+                              flagMap[key] ?? key === "occupied_menu_access"
+                            }
+                            onCheckedChange={(checked) =>
+                              handleToggleFlag(key as FeatureFlagKey, checked)
+                            }
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-medium ${flagMap[key] ? "text-primary" : "text-muted-foreground"}`}>
-                        {flagMap[key] ? "ON" : "OFF"}
-                      </span>
-                      <Switch
-                        checked={flagMap[key] ?? false}
-                        onCheckedChange={(checked) => handleToggleFlag(key, checked)}
-                      />
-                    </div>
-                  </div>
-                ))
-              )}
+                    ),
+                  )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -380,7 +644,11 @@ export default function SuperAdminRestaurantDetail() {
                 <CardTitle className="text-sm font-semibold">
                   Staff Members ({staff?.length ?? 0})
                 </CardTitle>
-                <Button size="sm" className="gap-1.5 h-8" onClick={() => setAssignOpen(true)}>
+                <Button
+                  size="sm"
+                  className="gap-1.5 h-8"
+                  onClick={() => setAssignOpen(true)}
+                >
                   <UserPlus className="w-3.5 h-3.5" />
                   Assign Staff
                 </Button>
@@ -389,14 +657,23 @@ export default function SuperAdminRestaurantDetail() {
             <CardContent>
               {staff === undefined ? (
                 <div className="space-y-2">
-                  {[...Array(2)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}
+                  {[...Array(2)].map((_, i) => (
+                    <Skeleton key={i} className="h-14 w-full" />
+                  ))}
                 </div>
               ) : staff.length === 0 ? (
                 <div className="text-center py-10 space-y-2">
                   <Users className="w-8 h-8 text-muted-foreground/40 mx-auto" />
                   <p className="text-sm font-medium">No staff assigned</p>
-                  <p className="text-xs text-muted-foreground">Assign managers and staff to this restaurant</p>
-                  <Button size="sm" variant="ghost" className="mt-2 gap-1.5" onClick={() => setAssignOpen(true)}>
+                  <p className="text-xs text-muted-foreground">
+                    Assign managers and staff to this restaurant
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="mt-2 gap-1.5"
+                    onClick={() => setAssignOpen(true)}
+                  >
                     <UserPlus className="w-3.5 h-3.5" />
                     Assign Staff
                   </Button>
@@ -404,23 +681,33 @@ export default function SuperAdminRestaurantDetail() {
               ) : (
                 <div className="space-y-2">
                   {staff.map((u) => (
-                    <div key={u._id} className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl">
+                    <div
+                      key={u._id}
+                      className="flex items-center gap-3 p-3 bg-muted/30 rounded-xl"
+                    >
                       <div className="w-9 h-9 bg-primary/10 rounded-full flex items-center justify-center text-primary font-bold text-sm flex-shrink-0">
                         {(u.name ?? u.email ?? "?")[0].toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{u.name ?? u.email ?? "Unknown"}</p>
+                        <p className="text-sm font-medium truncate">
+                          {u.name ?? u.email ?? "Unknown"}
+                        </p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {u.role === "RESTAURANT_MANAGER" ? (
                             <ShieldCheck className="w-3 h-3 text-primary" />
                           ) : (
                             <ShieldAlert className="w-3 h-3 text-muted-foreground" />
                           )}
-                          <span className="text-xs text-muted-foreground">{ROLE_LABELS[u.role ?? ""] ?? u.role}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {ROLE_LABELS[u.role ?? ""] ?? u.role}
+                          </span>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge variant={u.isActive ? "default" : "secondary"} className="text-xs">
+                        <Badge
+                          variant={u.isActive ? "default" : "secondary"}
+                          className="text-xs"
+                        >
                           {u.isActive ? "Active" : "Inactive"}
                         </Badge>
                         <Button
@@ -429,8 +716,15 @@ export default function SuperAdminRestaurantDetail() {
                           className="h-7 text-xs"
                           onClick={async () => {
                             try {
-                              await setUserActive({ userId: u._id, isActive: !u.isActive });
-                              toast.success(!u.isActive ? "User activated" : "User deactivated");
+                              await setUserActive({
+                                userId: u._id,
+                                isActive: !u.isActive,
+                              });
+                              toast.success(
+                                !u.isActive
+                                  ? "User activated"
+                                  : "User deactivated",
+                              );
                             } catch {
                               toast.error("Failed to update user");
                             }
@@ -451,31 +745,50 @@ export default function SuperAdminRestaurantDetail() {
         <TabsContent value="activity" className="mt-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold">Restaurant Activity Log</CardTitle>
+              <CardTitle className="text-sm font-semibold">
+                Restaurant Activity Log
+              </CardTitle>
             </CardHeader>
             <CardContent>
               {auditLogs === undefined ? (
                 <div className="space-y-2">
-                  {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+                  {[...Array(4)].map((_, i) => (
+                    <Skeleton key={i} className="h-12 w-full" />
+                  ))}
                 </div>
               ) : auditLogs.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">No activity recorded yet</p>
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  No activity recorded yet
+                </p>
               ) : (
                 <div className="space-y-2">
                   {auditLogs.map((log) => (
-                    <div key={log._id} className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                    <div
+                      key={log._id}
+                      className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg"
+                    >
                       <div className="w-1.5 h-1.5 rounded-full bg-primary mt-2 flex-shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium">{log.action.replace(/_/g, " ")}</p>
+                        <p className="text-sm font-medium">
+                          {log.action.replace(/_/g, " ")}
+                        </p>
                         <div className="flex flex-wrap gap-2 mt-0.5 text-xs text-muted-foreground">
                           {log.actorRole && <span>{log.actorRole}</span>}
-                          {log.requestId && <span className="font-mono">{log.requestId}</span>}
-                          <span>{new Date(log.timestamp).toLocaleString()}</span>
+                          {log.requestId && (
+                            <span className="font-mono">{log.requestId}</span>
+                          )}
+                          <span>
+                            {new Date(log.timestamp).toLocaleString()}
+                          </span>
                         </div>
                         {log.details && (
                           <details className="mt-1">
-                            <summary className="text-xs text-muted-foreground cursor-pointer">Details</summary>
-                            <pre className="text-xs font-mono bg-muted/50 rounded p-1.5 mt-1 overflow-x-auto">{log.details}</pre>
+                            <summary className="text-xs text-muted-foreground cursor-pointer">
+                              Details
+                            </summary>
+                            <pre className="text-xs font-mono bg-muted/50 rounded p-1.5 mt-1 overflow-x-auto">
+                              {log.details}
+                            </pre>
                           </details>
                         )}
                       </div>
@@ -491,7 +804,17 @@ export default function SuperAdminRestaurantDetail() {
       {/* Dialogs */}
       {restaurant && (
         <EditRestaurantDialog
-          restaurant={restaurant as { _id: string; name: string; slug: string; description?: string; address?: string; phone?: string; email?: string }}
+          restaurant={
+            restaurant as {
+              _id: string;
+              name: string;
+              slug: string;
+              description?: string;
+              address?: string;
+              phone?: string;
+              email?: string;
+            }
+          }
           open={editOpen}
           onClose={() => setEditOpen(false)}
         />

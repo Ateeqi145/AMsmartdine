@@ -54,6 +54,14 @@ function RoleRouter() {
     return <Navigate to="/super-admin/dashboard" replace />;
   }
 
+  if (user.role === "CUSTOMER") {
+    return <Navigate to="/customer/orders" replace />;
+  }
+
+  if (user.role === "DELIVERY_PERSON") {
+    return <Navigate to="/restaurant/orders" replace />;
+  }
+
   if (user.role === "RESTAURANT_MANAGER" || user.role === "RESTAURANT_STAFF") {
     return <Navigate to="/restaurant/dashboard" replace />;
   }
@@ -75,7 +83,7 @@ const features = [
   {
     icon: Users,
     title: "Role-Based",
-    desc: "Super Admin, Manager, Staff, Customer",
+    desc: "Super Admin, Manager, Staff, Delivery, Customer",
   },
   {
     icon: BarChart3,

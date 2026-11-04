@@ -5,15 +5,26 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 
 type AuthContext = MutationCtx | QueryCtx;
 
-export async function requireUser(ctx: AuthContext) {
+export async function getCurrentUser(ctx: AuthContext) {
 	const userId = await getAuthUserId(ctx);
-	if (!userId) {
+	return userId ? await ctx.db.get("users", userId) : null;
+}
+
+export async function requireUser(ctx: AuthContext) {
+	const user = await getCurrentUser(ctx);
+	if (!user) {
 		throw new ConvexError({ message: "Not authenticated", code: "UNAUTHENTICATED" });
 	}
-
-	const user = await ctx.db.get("users", userId);
-	if (!user || user.isActive === false) {
+	if (user.isActive === false) {
 		throw new ConvexError({ message: "User is not active", code: "FORBIDDEN" });
+	}
+	return user;
+}
+
+export async function requireCustomer(ctx: AuthContext) {
+	const user = await requireUser(ctx);
+	if (user.role !== "CUSTOMER" || !user.phone) {
+		throw new ConvexError({ message: "Customer access required", code: "FORBIDDEN" });
 	}
 	return user;
 }
@@ -34,7 +45,8 @@ export async function requireRestaurantAccess(
 	if (
 		user.role !== "SUPER_ADMIN" &&
 		(user.restaurantId !== restaurantId ||
-			(user.role !== "RESTAURANT_MANAGER" && user.role !== "RESTAURANT_STAFF"))
+			(user.role !== "RESTAURANT_MANAGER" &&
+			user.role !== "RESTAURANT_STAFF"))
 	) {
 		throw new ConvexError({ message: "Restaurant access required", code: "FORBIDDEN" });
 	}

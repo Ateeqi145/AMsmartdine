@@ -17,8 +17,8 @@ export async function recordCustomerAction(
   ctx: MutationCtx,
   event: {
     restaurantId: Id<"restaurants">;
-    sessionId: Id<"sessions">;
-    tableId: Id<"tables">;
+    sessionId?: Id<"sessions">;
+    tableId?: Id<"tables">;
     eventType: CustomerActionType;
     message: string;
     orderId?: Id<"orders">;

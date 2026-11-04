@@ -120,6 +120,7 @@ function StaffAlerts({
   const customAudio = useRef<HTMLAudioElement | null>(null);
   const seen = useRef(new Set<string>());
   const initialized = useRef(false);
+  const mountedAt = useRef(0);
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -150,10 +151,7 @@ function StaffAlerts({
     };
     window.addEventListener("smartdine:order-sound-preview", previewSound);
     return () =>
-      window.removeEventListener(
-        "smartdine:order-sound-preview",
-        previewSound,
-      );
+      window.removeEventListener("smartdine:order-sound-preview", previewSound);
   }, []);
 
   useEffect(() => {
@@ -175,20 +173,32 @@ function StaffAlerts({
   }, []);
 
   useEffect(() => {
+    mountedAt.current = Date.now();
+  }, []);
+
+  useEffect(() => {
     if (!notifications) return;
+    let fresh: typeof notifications;
     if (!initialized.current) {
-      for (const notification of notifications)
+      fresh = notifications.filter(
+        (notification) =>
+          new Date(notification.createdAt).getTime() >= mountedAt.current,
+      );
+      for (const notification of notifications) {
         seen.current.add(notification._id);
+      }
       initialized.current = true;
-      return;
+    } else {
+      fresh = notifications
+        .filter((notification) => !seen.current.has(notification._id))
+        .slice()
+        .reverse();
+      for (const notification of fresh) {
+        seen.current.add(notification._id);
+      }
     }
 
-    const fresh = notifications
-      .filter((notification) => !seen.current.has(notification._id))
-      .slice()
-      .reverse();
     for (const notification of fresh) {
-      seen.current.add(notification._id);
       if (notification.eventType === "ORDER_PLACED" && soundEnabled) {
         if (customSoundUrl) {
           customAudio.current = playCustomOrderAlert(
@@ -199,14 +209,38 @@ function StaffAlerts({
           playOrderAlert(audioContext.current, soundTone);
         }
       }
-      toast(notification.message, {
-        description: `${notification.tableDisplayName} · ${new Date(notification.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-        duration: 9000,
-        action: {
-          label: "Open orders",
-          onClick: () => navigate("/restaurant/orders"),
+      toast.custom(
+        (toastId) => (
+          <button
+            type="button"
+            className="w-full rounded-xl border bg-background p-4 text-left shadow-lg transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => {
+              toast.dismiss(toastId);
+              navigate("/restaurant/orders");
+            }}
+          >
+            <span className="block text-xs font-semibold uppercase tracking-wide text-primary">
+              {notification.eventType === "ORDER_PLACED"
+                ? "New order received"
+                : "Customer update"}
+            </span>
+            <span className="mt-1 block text-sm font-semibold">
+              {notification.message}
+            </span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {notification.tableDisplayName} ·{" "}
+              {new Date(notification.createdAt).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}{" "}
+              · Click to open Orders
+            </span>
+          </button>
+        ),
+        {
+          duration: 9000,
         },
-      });
+      );
     }
   }, [customSoundUrl, navigate, notifications, soundEnabled, soundTone]);
 
@@ -270,9 +304,16 @@ function ManagerGuard({ children }: { children: React.ReactNode }) {
   }
   if (
     user?.role !== "RESTAURANT_MANAGER" &&
-    user?.role !== "RESTAURANT_STAFF"
+    user?.role !== "RESTAURANT_STAFF" &&
+    user?.role !== "DELIVERY_PERSON"
   ) {
     return <Navigate to="/unauthorized" replace />;
+  }
+  if (
+    user.role === "DELIVERY_PERSON" &&
+    location.pathname !== "/restaurant/orders"
+  ) {
+    return <Navigate to="/restaurant/orders" replace />;
   }
   if (user.role === "RESTAURANT_STAFF" && managerOnlyPage) {
     return <Navigate to="/restaurant/orders" replace />;
@@ -295,11 +336,14 @@ export default function ManagerLayout() {
     api.users.getCurrentUserRestaurant,
     user?.isActive === false ? "skip" : {},
   );
+  const isManager = user?.role === "RESTAURANT_MANAGER";
+  const isDeliveryPerson = user?.role === "DELIVERY_PERSON";
   const actionCounts = useQuery(
     api.sessions.getManagerActionCounts,
-    restaurant?._id ? { restaurantId: restaurant._id } : "skip",
+    restaurant?._id && !isDeliveryPerson
+      ? { restaurantId: restaurant._id }
+      : "skip",
   );
-  const isManager = user?.role === "RESTAURANT_MANAGER";
   const [soundEnabled, setSoundEnabled] = useState(
     () => window.localStorage.getItem("smartdine-order-sound") !== "off",
   );
@@ -330,13 +374,13 @@ export default function ManagerLayout() {
       window.removeEventListener("smartdine:order-sound-tone", updateTone);
   }, []);
 
-  const visibleNav = navItems.filter((item) => !item.managerOnly || isManager);
+  const visibleNav = isDeliveryPerson
+    ? navItems.filter((item) => item.to === "/restaurant/orders")
+    : navItems.filter((item) => !item.managerOnly || isManager);
   const restaurantId = restaurant?._id;
   const getActionCount = (to: string) => {
     if (to === "/restaurant/orders") {
-      return (
-        (actionCounts?.orders ?? 0) + (actionCounts?.unusedSessions ?? 0)
-      );
+      return (actionCounts?.orders ?? 0) + (actionCounts?.unusedSessions ?? 0);
     }
     if (to === "/restaurant/dashboard" && isManager) {
       return actionCounts?.unusedSessions ?? 0;
@@ -373,13 +417,15 @@ export default function ManagerLayout() {
                     {restaurant?.name ?? "SmartDine"}
                   </p>
                   <p className="text-[9px] font-semibold uppercase text-primary">
-                    {restaurant?.businessType === "CAFE"
-                      ? isManager
-                        ? "Cafe Manager"
-                        : "Cafe Staff"
-                      : isManager
-                        ? "Restaurant Manager"
-                        : "Restaurant Staff"}
+                    {isDeliveryPerson
+                      ? "Delivery Person"
+                      : restaurant?.businessType === "CAFE"
+                        ? isManager
+                          ? "Cafe Manager"
+                          : "Cafe Staff"
+                        : isManager
+                          ? "Restaurant Manager"
+                          : "Restaurant Staff"}
                   </p>
                 </div>
               </div>
@@ -416,9 +462,7 @@ export default function ManagerLayout() {
                         aria-label={`${getActionCount(to)} action${getActionCount(to) === 1 ? "" : "s"} available`}
                         className="hidden min-w-5 animate-pulse items-center justify-center rounded-full bg-destructive px-1.5 py-0.5 text-[10px] font-bold leading-none text-destructive-foreground md:inline-flex"
                       >
-                        {getActionCount(to) > 99
-                          ? "99+"
-                          : getActionCount(to)}
+                        {getActionCount(to) > 99 ? "99+" : getActionCount(to)}
                       </span>
                     )}
                   </NavLink>
@@ -432,7 +476,7 @@ export default function ManagerLayout() {
               </button>
             </aside>
             <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
-              {restaurantId && (
+              {restaurantId && user && !isDeliveryPerson && (
                 <StaffAlertsBoundary key={restaurantId}>
                   <StaffAlerts
                     restaurantId={restaurantId}

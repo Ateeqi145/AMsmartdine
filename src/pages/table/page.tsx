@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useParams } from "react-router-dom";
 import { api } from "@/convex/_generated/api";
@@ -80,13 +80,31 @@ export default function TablePage() {
     api.tables.getByQrToken,
     qrToken ? { qrCodeToken: qrToken } : "skip",
   );
+  const [customerId] = useState(getCustomerId);
+  const occupiedMenuFlags = useQuery(
+    api.featureFlags.listPublic,
+    tableInfo?.restaurant?._id
+      ? { restaurantId: tableInfo.restaurant._id }
+      : "skip",
+  );
   const openOrJoinSession = useMutation(api.sessions.openOrJoinSession);
+  const exitUnusedSession = useMutation(api.sessions.exitUnusedSession);
+  const refreshUnorderedSession = useMutation(
+    api.sessions.refreshUnorderedSession,
+  );
   const [sessionId, setSessionId] = useState<Id<"sessions"> | null>(() =>
     getSavedSessionId(qrToken),
   );
+  const [savedSessionIdAtLoad] = useState(sessionId);
+  const refreshAttempted = useRef(false);
+  const [refreshedSessionId, setRefreshedSessionId] =
+    useState<Id<"sessions"> | null>(null);
+  const [sessionExited, setSessionExited] = useState(false);
+  const [sessionFullyClosed, setSessionFullyClosed] = useState(false);
+  const [sessionBusy, setSessionBusy] = useState(false);
   const session = useQuery(
     api.sessions.getById,
-    sessionId ? { sessionId } : "skip",
+    sessionId ? { sessionId, customerId } : "skip",
   );
   const savedSessionTableMismatch = Boolean(
     sessionId &&
@@ -96,17 +114,19 @@ export default function TablePage() {
   );
   const savedSessionOrders = useQuery(
     api.orders.listBySession,
-    sessionId && !savedSessionTableMismatch ? { sessionId } : "skip",
+    sessionId && !savedSessionTableMismatch && session?.isHost
+      ? { sessionId, customerId }
+      : "skip",
   );
-  const savedSessionIsClosedUnused =
+  const savedSessionHasNoActiveOrders =
     session?.session.status === "CLOSED" &&
     savedSessionOrders !== undefined &&
-    savedSessionOrders.length === 0;
+    savedSessionOrders.every((order) => order.status === "CANCELLED");
   const savedSessionIsStale = savedSessionTableMismatch;
-  const activeSessionId = savedSessionIsStale ? null : sessionId;
+  const activeSessionId =
+    savedSessionIsStale || session?.isHost === false ? null : sessionId;
   const [sessionRetry, setSessionRetry] = useState(0);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [customerId] = useState(getCustomerId);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [search, setSearch] = useState("");
   const [cartOpen, setCartOpen] = useState(false);
@@ -125,7 +145,8 @@ export default function TablePage() {
       !restaurant ||
       !table.isActive ||
       !restaurant.isActive ||
-      activeSessionId
+      activeSessionId ||
+      sessionExited
     )
       return;
 
@@ -140,17 +161,21 @@ export default function TablePage() {
       customerCount: 1,
       customerId,
     })
-      .then(({ sessionId: openedSessionId }) => {
-        if (active) {
+      .then(({ sessionId: openedSessionId, isHost }) => {
+        if (active && isHost && openedSessionId) {
+          setSessionBusy(false);
           window.localStorage.setItem(
             `smartdine-session:${qrToken}`,
             openedSessionId,
           );
           setSessionId(openedSessionId);
+        } else if (active) {
+          setSessionBusy(true);
         }
       })
       .catch((error: unknown) => {
         if (active) {
+          setSessionBusy(false);
           setSessionError(
             error instanceof Error
               ? error.message
@@ -168,15 +193,65 @@ export default function TablePage() {
     qrToken,
     activeSessionId,
     savedSessionIsStale,
+    sessionExited,
     sessionRetry,
     tableInfo,
+  ]);
+
+  useEffect(() => {
+    if (
+      !sessionId ||
+      sessionId !== savedSessionIdAtLoad ||
+      session?.isHost !== true ||
+      session?.session.status !== "ACTIVE" ||
+      savedSessionOrders === undefined ||
+      refreshAttempted.current
+    ) {
+      return;
+    }
+
+    refreshAttempted.current = true;
+    if (savedSessionOrders.some((order) => order.status !== "CANCELLED")) {
+      return;
+    }
+
+    void refreshUnorderedSession({ sessionId, customerId })
+      .then(({ closed }) => {
+        if (getSavedSessionId(qrToken) !== sessionId) return;
+        if (closed) {
+          if (qrToken) {
+            window.localStorage.removeItem(`smartdine-session:${qrToken}`);
+          }
+          setSessionId(null);
+        } else {
+          setRefreshedSessionId(sessionId);
+        }
+      })
+      .catch((error: unknown) => {
+        if (getSavedSessionId(qrToken) !== sessionId) return;
+        setSessionError(
+          error instanceof Error
+            ? error.message
+            : "Could not refresh the unused table session.",
+        );
+      });
+  }, [
+    customerId,
+    qrToken,
+    refreshUnorderedSession,
+    savedSessionIdAtLoad,
+    savedSessionOrders,
+    session,
+    sessionId,
   ]);
 
   const menuCategories = tableInfo?.categories;
   const menuItems = tableInfo?.menuItems;
   const cart = useQuery(
     api.cart.getCart,
-    activeSessionId ? { sessionId: activeSessionId, customerId } : "skip",
+    activeSessionId && session?.isHost
+      ? { sessionId: activeSessionId, customerId }
+      : "skip",
   );
   const orders = activeSessionId ? savedSessionOrders : undefined;
   const addToCart = useMutation(api.cart.addToCart);
@@ -208,7 +283,13 @@ export default function TablePage() {
     0,
   );
   const currency = tableInfo?.restaurant?.currency ?? "INR";
-  const isOrderable = session?.session.status === "ACTIVE";
+  const isOrderable =
+    session?.isHost === true &&
+    session?.session.status === "ACTIVE" &&
+    savedSessionOrders !== undefined &&
+    (sessionId !== savedSessionIdAtLoad ||
+      savedSessionOrders.length > 0 ||
+      refreshedSessionId === sessionId);
   const hasOrders = (orders?.length ?? 0) > 0;
 
   const visibleCategories = activeCategories.filter((category) => {
@@ -256,6 +337,12 @@ export default function TablePage() {
 
   const handleCancelOrder = async (orderId: Id<"orders">) => {
     if (cancellingOrderId) return;
+    if (!window.confirm("Cancel this order?")) return;
+    if (
+      !window.confirm("Confirm cancellation? This action cannot be undone.")
+    ) {
+      return;
+    }
     setCancellingOrderId(orderId);
     try {
       await cancelOrder({
@@ -275,9 +362,42 @@ export default function TablePage() {
 
   const startNewVisit = () => {
     if (qrToken) window.localStorage.removeItem(`smartdine-session:${qrToken}`);
+    setSessionExited(false);
     setBillOpen(false);
     setSessionId(null);
     setSessionError(null);
+  };
+
+  const exitTableSession = async () => {
+    if (!activeSessionId || !qrToken || hasOrders) return;
+    if (
+      !window.confirm(
+        "Leave this table? Your unsubmitted cart will be cleared and the table will be released.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const sessionClosed = await exitUnusedSession({
+        sessionId: activeSessionId,
+        customerId,
+      });
+      window.localStorage.removeItem(`smartdine-session:${qrToken}`);
+      setSessionId(null);
+      setSessionExited(true);
+      setSessionFullyClosed(sessionClosed);
+      toast.success(
+        sessionClosed
+          ? "You have left the table session."
+          : "You left your session. Other guests can continue dining.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Could not leave this table session.",
+      );
+    }
   };
 
   const submitOrder = async () => {
@@ -332,9 +452,21 @@ export default function TablePage() {
 
   const { table, restaurant } = tableInfo;
   const tableName = table.displayName ?? `Table ${table.tableNumber}`;
-  const isOccupied = sessionError?.toLowerCase().includes("occupied") ?? false;
+  const isOccupiedReadOnly =
+    sessionBusy ||
+    Boolean(
+      !savedSessionIsStale &&
+      session &&
+      !session.isHost &&
+      session.session.status !== "CLOSED",
+    );
+  const canBrowseOccupiedMenu =
+    occupiedMenuFlags !== undefined &&
+    (occupiedMenuFlags.find((flag) => flag.key === "occupied_menu_access")
+      ?.enabled ??
+      true);
 
-  if (isOccupied) {
+  if (isOccupiedReadOnly && !canBrowseOccupiedMenu) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-muted/30 px-6">
         <section className="w-full max-w-sm rounded-2xl border bg-background p-6 text-center">
@@ -348,16 +480,17 @@ export default function TablePage() {
             <UtensilsCrossed className="mx-auto mb-4 size-8 text-primary" />
           )}
           <p className="text-sm font-semibold">{restaurant.name}</p>
-          <h1 className="mt-2 text-xl font-bold">This table is occupied</h1>
+          <h1 className="mt-2 text-xl font-bold">This table session is busy</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {tableName} already has an active customer session. Please wait for
-            that visit to finish or ask a staff member for help.
+            Menu browsing is currently disabled for guests while {tableName} is
+            in use. The session owner can continue ordering.
           </p>
           <Button
             variant="outline"
             className="mt-5 w-full"
             onClick={() => {
               setSessionError(null);
+              setSessionBusy(false);
               setSessionRetry((attempt) => attempt + 1);
             }}
           >
@@ -383,20 +516,22 @@ export default function TablePage() {
         <section className="mx-auto max-w-2xl space-y-5 px-4 py-8">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
-              {savedSessionIsClosedUnused ? "Session closed" : "Visit complete"}
+              {savedSessionHasNoActiveOrders
+                ? "Session closed"
+                : "Visit complete"}
             </p>
             <h1 className="mt-2 text-2xl font-bold">
-              {savedSessionIsClosedUnused
-                ? "This unused session was closed"
+              {savedSessionHasNoActiveOrders
+                ? "All orders were cancelled, so this table session is closed."
                 : "Thank you for dining"}
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {savedSessionIsClosedUnused
-                ? "Staff closed this table session because no order was placed."
+              {savedSessionHasNoActiveOrders
+                ? "You can start a new visit if you want to place another order."
                 : "Your bill is settled. We would love to hear how your visit went."}
             </p>
           </div>
-          {!savedSessionIsClosedUnused && (
+          {!savedSessionHasNoActiveOrders && (
             <div className="rounded-2xl border bg-background">
               <CustomerBillPanel sessionId={activeSessionId} />
             </div>
@@ -404,6 +539,27 @@ export default function TablePage() {
           <Button className="w-full" variant="outline" onClick={startNewVisit}>
             Start a new visit
           </Button>
+        </section>
+      </main>
+    );
+  }
+
+  if (sessionExited) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/30 px-6">
+        <section className="w-full max-w-sm rounded-2xl border bg-background p-6 text-center">
+          <UtensilsCrossed className="mx-auto mb-4 size-8 text-primary" />
+          <h1 className="text-xl font-bold">You left the table</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {sessionFullyClosed
+              ? "Your unused table session is closed. You can start a new visit if you are still dining here."
+              : "You left the session. Other guests at this table can continue their visit."}
+          </p>
+          {sessionFullyClosed && (
+            <Button className="mt-5 w-full" onClick={startNewVisit}>
+              Start a new visit
+            </Button>
+          )}
         </section>
       </main>
     );
@@ -469,10 +625,36 @@ export default function TablePage() {
               className="mt-3"
               onClick={() => {
                 setSessionError(null);
+                setSessionBusy(false);
                 setSessionRetry((attempt) => attempt + 1);
               }}
             >
               Try connecting again
+            </Button>
+          </div>
+        )}
+
+        {isOccupiedReadOnly && (
+          <div
+            role="status"
+            className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4"
+          >
+            <p className="text-sm font-semibold">This table session is busy</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              You can review the menu, but only the first customer who opened
+              this session can change the cart, place orders, or manage them.
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              onClick={() => {
+                setSessionBusy(false);
+                setSessionRetry((attempt) => attempt + 1);
+              }}
+            >
+              Check again
             </Button>
           </div>
         )}
@@ -756,15 +938,12 @@ export default function TablePage() {
                                     <span className="text-sm font-bold">
                                       {formatPrice(item.price, currency)}
                                     </span>
-                                    {entry ? (
+                                    {isOrderable && entry ? (
                                       <div className="flex h-9 items-center gap-3 rounded-xl bg-primary px-2 text-primary-foreground">
                                         <button
                                           type="button"
                                           aria-label={`Remove one ${item.name}`}
-                                          disabled={
-                                            busyItemId === item._id ||
-                                            !isOrderable
-                                          }
+                                          disabled={busyItemId === item._id}
                                           onClick={() =>
                                             void changeQuantity(item._id, -1)
                                           }
@@ -778,10 +957,7 @@ export default function TablePage() {
                                         <button
                                           type="button"
                                           aria-label={`Add one ${item.name}`}
-                                          disabled={
-                                            busyItemId === item._id ||
-                                            !isOrderable
-                                          }
+                                          disabled={busyItemId === item._id}
                                           onClick={() =>
                                             void changeQuantity(item._id, 1)
                                           }
@@ -790,15 +966,12 @@ export default function TablePage() {
                                           <Plus className="size-4" />
                                         </button>
                                       </div>
-                                    ) : (
+                                    ) : isOrderable ? (
                                       <Button
                                         size="sm"
                                         variant="outline"
                                         className="h-9 rounded-xl border-primary/30 px-4 text-primary hover:bg-primary hover:text-primary-foreground"
-                                        disabled={
-                                          !isOrderable ||
-                                          busyItemId === item._id
-                                        }
+                                        disabled={busyItemId === item._id}
                                         onClick={() =>
                                           void changeQuantity(item._id, 1)
                                         }
@@ -808,7 +981,7 @@ export default function TablePage() {
                                           : "Add"}
                                         <Plus className="ml-1 size-3.5" />
                                       </Button>
-                                    )}
+                                    ) : null}
                                   </div>
                                 </div>
                                 <div className="relative size-28 shrink-0 overflow-hidden rounded-xl bg-muted sm:size-32">
@@ -857,9 +1030,28 @@ export default function TablePage() {
             </Button>
           </section>
         )}
+        {activeSessionId &&
+          session?.session.status === "ACTIVE" &&
+          orders !== undefined &&
+          orders.length === 0 && (
+            <section className="mt-6 border-t pt-5">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full rounded-2xl"
+                onClick={() => void exitTableSession()}
+              >
+                Leave this table
+              </Button>
+              <p className="mt-2 text-center text-xs text-muted-foreground">
+                Available until you place an order. Your unsubmitted cart will
+                be cleared.
+              </p>
+            </section>
+          )}
       </div>
 
-      {itemCount > 0 && (
+      {isOrderable && itemCount > 0 && (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] shadow-[0_-8px_30px_rgba(0,0,0,0.08)] backdrop-blur">
           <div className="mx-auto flex max-w-2xl items-center gap-3">
             <div className="min-w-0 flex-1">
@@ -881,92 +1073,94 @@ export default function TablePage() {
         </div>
       )}
 
-      <Sheet open={cartOpen} onOpenChange={setCartOpen}>
-        <SheetContent
-          side="bottom"
-          className="mx-auto max-h-[90vh] max-w-2xl overflow-y-auto rounded-t-3xl px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]"
-        >
-          <SheetHeader className="px-0 pr-10">
-            <SheetTitle>Your order</SheetTitle>
-            <SheetDescription>
-              Review your items before sending them to the kitchen.
-            </SheetDescription>
-          </SheetHeader>
-          <div className="space-y-3">
-            {cartEntries.map((entry) => (
-              <div
-                key={entry._id}
-                className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold">
-                    {entry.menuItem!.name}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {formatPrice(entry.menuItem!.price, currency)} each
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    aria-label={`Remove one ${entry.menuItem!.name}`}
-                    disabled={busyItemId === entry.menuItemId}
-                    onClick={() => void changeQuantity(entry.menuItemId, -1)}
-                    className="grid size-8 place-items-center rounded-lg border bg-background disabled:opacity-50"
-                  >
-                    <Minus className="size-4" />
-                  </button>
-                  <span className="w-5 text-center text-sm font-semibold">
-                    {entry.quantity}
+      {isOrderable && (
+        <Sheet open={cartOpen} onOpenChange={setCartOpen}>
+          <SheetContent
+            side="bottom"
+            className="mx-auto max-h-[90vh] max-w-2xl overflow-y-auto rounded-t-3xl px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)]"
+          >
+            <SheetHeader className="px-0 pr-10">
+              <SheetTitle>Your order</SheetTitle>
+              <SheetDescription>
+                Review your items before sending them to the kitchen.
+              </SheetDescription>
+            </SheetHeader>
+            <div className="space-y-3">
+              {cartEntries.map((entry) => (
+                <div
+                  key={entry._id}
+                  className="flex items-center gap-3 rounded-2xl bg-muted/60 p-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-semibold">
+                      {entry.menuItem!.name}
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {formatPrice(entry.menuItem!.price, currency)} each
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      aria-label={`Remove one ${entry.menuItem!.name}`}
+                      disabled={busyItemId === entry.menuItemId}
+                      onClick={() => void changeQuantity(entry.menuItemId, -1)}
+                      className="grid size-8 place-items-center rounded-lg border bg-background disabled:opacity-50"
+                    >
+                      <Minus className="size-4" />
+                    </button>
+                    <span className="w-5 text-center text-sm font-semibold">
+                      {entry.quantity}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Add one ${entry.menuItem!.name}`}
+                      disabled={busyItemId === entry.menuItemId}
+                      onClick={() => void changeQuantity(entry.menuItemId, 1)}
+                      className="grid size-8 place-items-center rounded-lg border bg-background disabled:opacity-50"
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  </div>
+                  <span className="w-16 text-right text-sm font-semibold">
+                    {formatPrice(
+                      entry.menuItem!.price * entry.quantity,
+                      currency,
+                    )}
                   </span>
-                  <button
-                    type="button"
-                    aria-label={`Add one ${entry.menuItem!.name}`}
-                    disabled={busyItemId === entry.menuItemId}
-                    onClick={() => void changeQuantity(entry.menuItemId, 1)}
-                    className="grid size-8 place-items-center rounded-lg border bg-background disabled:opacity-50"
-                  >
-                    <Plus className="size-4" />
-                  </button>
                 </div>
-                <span className="w-16 text-right text-sm font-semibold">
-                  {formatPrice(
-                    entry.menuItem!.price * entry.quantity,
-                    currency,
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 border-t pt-4">
-            <div className="flex items-center justify-between text-base font-bold">
-              <span>Subtotal</span>
-              <span>{formatPrice(subtotal, currency)}</span>
+              ))}
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Any applicable taxes will be shown on your final bill.
-            </p>
-            <Button
-              className="mt-4 h-12 w-full rounded-2xl"
-              disabled={
-                placingOrder || !isOrderable || cartEntries.length === 0
-              }
-              onClick={() => void submitOrder()}
-            >
-              {placingOrder
-                ? "Sending order..."
-                : `Send order · ${formatPrice(subtotal, currency)}`}
-            </Button>
-            {!isOrderable && (
-              <p className="mt-2 text-center text-xs text-muted-foreground">
-                Ordering is unavailable for this table right now.
+            <div className="mt-5 border-t pt-4">
+              <div className="flex items-center justify-between text-base font-bold">
+                <span>Subtotal</span>
+                <span>{formatPrice(subtotal, currency)}</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Any applicable taxes will be shown on your final bill.
               </p>
-            )}
-          </div>
-        </SheetContent>
-      </Sheet>
+              <Button
+                className="mt-4 h-12 w-full rounded-2xl"
+                disabled={
+                  placingOrder || !isOrderable || cartEntries.length === 0
+                }
+                onClick={() => void submitOrder()}
+              >
+                {placingOrder
+                  ? "Sending order..."
+                  : `Send order · ${formatPrice(subtotal, currency)}`}
+              </Button>
+              {!isOrderable && (
+                <p className="mt-2 text-center text-xs text-muted-foreground">
+                  Ordering is unavailable for this table right now.
+                </p>
+              )}
+            </div>
+          </SheetContent>
+        </Sheet>
+      )}
 
-      {activeSessionId && (
+      {activeSessionId && session?.isHost && (
         <Sheet open={billOpen} onOpenChange={setBillOpen}>
           <SheetContent
             side="bottom"

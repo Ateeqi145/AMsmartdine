@@ -29,7 +29,14 @@ import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { toast } from "sonner";
 import { getUserFacingErrorMessage } from "@/lib/error-catalog";
-import { Users, ShieldCheck, ShieldAlert, Shield, Search } from "lucide-react";
+import {
+  Users,
+  ShieldCheck,
+  ShieldAlert,
+  Shield,
+  Search,
+  Truck,
+} from "lucide-react";
 
 const ROLE_META: Record<
   string,
@@ -50,8 +57,17 @@ const ROLE_META: Record<
     color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
     icon: ShieldAlert,
   },
+  DELIVERY_PERSON: {
+    label: "Delivery Person",
+    color: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+    icon: Truck,
+  },
 };
-type StaffRole = "SUPER_ADMIN" | "RESTAURANT_MANAGER" | "RESTAURANT_STAFF";
+type StaffRole =
+  | "SUPER_ADMIN"
+  | "RESTAURANT_MANAGER"
+  | "RESTAURANT_STAFF"
+  | "DELIVERY_PERSON";
 
 function AssignRoleDialog({
   user,
@@ -78,7 +94,9 @@ function AssignRoleDialog({
   const [loading, setLoading] = useState(false);
 
   const needsRestaurant =
-    role === "RESTAURANT_MANAGER" || role === "RESTAURANT_STAFF";
+    role === "RESTAURANT_MANAGER" ||
+    role === "RESTAURANT_STAFF" ||
+    role === "DELIVERY_PERSON";
 
   const handleSave = async () => {
     if (needsRestaurant && !restaurantId) {
@@ -135,6 +153,7 @@ function AssignRoleDialog({
                 <SelectItem value="RESTAURANT_STAFF">
                   Restaurant Staff
                 </SelectItem>
+                <SelectItem value="DELIVERY_PERSON">Delivery Person</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -328,6 +347,7 @@ export default function SuperAdminUsers() {
 
       {editingUser && (
         <AssignRoleDialog
+          key={editingUser._id}
           user={editingUser}
           restaurants={restaurants ?? []}
           open={!!editingUser}
