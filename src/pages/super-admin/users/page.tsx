@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { toast } from "sonner";
 import { getUserFacingErrorMessage } from "@/lib/error-catalog";
+import { DeleteUserDialog } from "@/components/users/delete-user-dialog";
 import {
   Users,
   ShieldCheck,
@@ -36,6 +37,7 @@ import {
   Shield,
   Search,
   Truck,
+  Trash2,
 } from "lucide-react";
 
 const ROLE_META: Record<
@@ -64,10 +66,7 @@ const ROLE_META: Record<
   },
 };
 type StaffRole =
-  | "SUPER_ADMIN"
-  | "RESTAURANT_MANAGER"
-  | "RESTAURANT_STAFF"
-  | "DELIVERY_PERSON";
+  "SUPER_ADMIN" | "RESTAURANT_MANAGER" | "RESTAURANT_STAFF" | "DELIVERY_PERSON";
 
 function AssignRoleDialog({
   user,
@@ -194,10 +193,12 @@ function AssignRoleDialog({
 
 export default function SuperAdminUsers() {
   const allUsers = useQuery(api.admin.listAllUsers, {});
+  const currentUser = useQuery(api.users.getCurrentUser, {});
   const restaurants = useQuery(api.restaurants.listAll, {
     includeInactive: true,
   });
   const setUserActive = useMutation(api.admin.setUserActive);
+  const deleteUser = useMutation(api.admin.deleteUser);
   const [editingUser, setEditingUser] = useState<{
     _id: string;
     name?: string;
@@ -205,7 +206,27 @@ export default function SuperAdminUsers() {
     role?: string;
     restaurantId?: string;
   } | null>(null);
+  const [deletingUser, setDeletingUser] = useState<{
+    _id: Id<"users">;
+    name?: string;
+    email?: string;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [search, setSearch] = useState("");
+
+  const handleDeleteUser = async () => {
+    if (!deletingUser) return;
+    setIsDeleting(true);
+    try {
+      await deleteUser({ userId: deletingUser._id });
+      toast.success("User deleted");
+      setDeletingUser(null);
+    } catch (error) {
+      toast.error(getUserFacingErrorMessage(error, "Failed to delete user"));
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const restaurantMap = Object.fromEntries(
     (restaurants ?? []).map((r) => [r._id, r.name]),
@@ -226,7 +247,8 @@ export default function SuperAdminUsers() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Users</h1>
         <p className="text-muted-foreground text-sm mt-0.5">
-          Manage platform users and role assignments
+          Manage platform users and role assignments. Your active Super Admin
+          account cannot be deleted here.
         </p>
       </div>
 
@@ -299,7 +321,7 @@ export default function SuperAdminUsers() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex flex-wrap items-center justify-end gap-2 flex-shrink-0">
                       <Badge
                         variant={u.isActive ? "default" : "secondary"}
                         className="text-xs"
@@ -336,6 +358,18 @@ export default function SuperAdminUsers() {
                       >
                         {u.isActive ? "Deactivate" : "Activate"}
                       </Button>
+                      {currentUser && u._id !== currentUser._id && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs text-destructive hover:text-destructive"
+                          onClick={() => setDeletingUser(u)}
+                          aria-label={`Delete ${u.name ?? u.email ?? "user"}`}
+                        >
+                          <Trash2 className="mr-1 size-3.5" />
+                          Delete
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -352,6 +386,17 @@ export default function SuperAdminUsers() {
           restaurants={restaurants ?? []}
           open={!!editingUser}
           onClose={() => setEditingUser(null)}
+        />
+      )}
+      {deletingUser && (
+        <DeleteUserDialog
+          userName={deletingUser.name ?? deletingUser.email ?? "this user"}
+          open={!!deletingUser}
+          isDeleting={isDeleting}
+          onOpenChange={(open) => {
+            if (!open) setDeletingUser(null);
+          }}
+          onConfirm={() => void handleDeleteUser()}
         />
       )}
     </div>

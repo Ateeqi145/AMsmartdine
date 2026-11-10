@@ -1,8 +1,14 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { requireRestaurantAccess, requireSuperAdmin } from "./lib/auth";
+import {
+  requireRestaurantAccess,
+  requireRestaurantManager,
+  requireSuperAdmin,
+  requireUser,
+} from "./lib/auth";
 import { assertRoleSlotAvailable } from "./lib/roleLimits";
+import { deleteUserAccount } from "./lib/deleteUser";
 
 /** Get current user with role info */
 export const getCurrentUser = query({
@@ -73,5 +79,80 @@ export const listByRestaurant = query({
         q.eq("restaurantId", args.restaurantId),
       )
       .collect();
+  },
+});
+
+/** Restaurant managers can change staff roles within their own restaurant. */
+export const updateRestaurantUserRole = mutation({
+  args: {
+    userId: v.id("users"),
+    role: v.union(v.literal("RESTAURANT_STAFF"), v.literal("DELIVERY_PERSON")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const currentUser = await requireUser(ctx);
+    if (!currentUser.restaurantId) {
+      throw new ConvexError({
+        message: "A restaurant is required to manage restaurant users",
+        code: "FORBIDDEN",
+      });
+    }
+    const manager = await requireRestaurantManager(
+      ctx,
+      currentUser.restaurantId,
+    );
+
+    const target = await ctx.db.get("users", args.userId);
+    if (
+      !target ||
+      target.restaurantId !== manager.restaurantId ||
+      target._id === manager._id ||
+      (target.role !== "RESTAURANT_STAFF" && target.role !== "DELIVERY_PERSON")
+    ) {
+      throw new ConvexError({
+        message: "You can only edit staff roles in your restaurant",
+        code: "FORBIDDEN",
+      });
+    }
+
+    await ctx.db.patch("users", target._id, {
+      role: args.role,
+      restaurantId: manager.restaurantId,
+    });
+    return null;
+  },
+});
+
+/** Restaurant managers can remove staff and delivery accounts in their restaurant. */
+export const deleteRestaurantUser = mutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const currentUser = await requireUser(ctx);
+    if (!currentUser.restaurantId) {
+      throw new ConvexError({
+        message: "A restaurant is required to manage restaurant users",
+        code: "FORBIDDEN",
+      });
+    }
+    const manager = await requireRestaurantManager(
+      ctx,
+      currentUser.restaurantId,
+    );
+    const target = await ctx.db.get("users", args.userId);
+
+    if (
+      !target ||
+      target.restaurantId !== manager.restaurantId ||
+      target._id === manager._id ||
+      (target.role !== "RESTAURANT_STAFF" && target.role !== "DELIVERY_PERSON")
+    ) {
+      throw new ConvexError({
+        message: "You can only remove staff in your restaurant",
+        code: "FORBIDDEN",
+      });
+    }
+
+    return await deleteUserAccount(ctx, target._id);
   },
 });

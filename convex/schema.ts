@@ -279,6 +279,7 @@ export default defineSchema({
     confirmedAt: v.optional(v.string()),
     preparingAt: v.optional(v.string()),
     readyAt: v.optional(v.string()),
+    hiddenFromOrdersAt: v.optional(v.string()),
     outForDeliveryAt: v.optional(v.string()),
     deliveredAt: v.optional(v.string()),
     deliveryTrackingTokenHash: v.optional(v.string()),

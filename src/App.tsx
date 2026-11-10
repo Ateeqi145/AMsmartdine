@@ -50,6 +50,7 @@ const ManagerOrdersPage = lazy(() => import("./pages/manager/orders/page.tsx"));
 const ManagerReportsPage = lazy(
   () => import("./pages/manager/reports/page.tsx"),
 );
+const ManagerUsersPage = lazy(() => import("./pages/manager/users/page.tsx"));
 const ManagerSettingsPage = lazy(
   () => import("./pages/manager/settings/page.tsx"),
 );
@@ -58,7 +59,9 @@ const OnlineOrderPage = lazy(() => import("./pages/order/page.tsx"));
 const DeliveryTrackingPage = lazy(
   () => import("./pages/delivery-tracking/page.tsx"),
 );
-const CustomerOrdersPage = lazy(() => import("./pages/customer/orders/page.tsx"));
+const CustomerOrdersPage = lazy(
+  () => import("./pages/customer/orders/page.tsx"),
+);
 
 function LegacyRestaurantRedirect() {
   const location = useLocation();
@@ -124,6 +127,7 @@ export default function App() {
                 element={<Navigate to="/restaurant/orders" replace />}
               />
               <Route path="reports" element={<ManagerReportsPage />} />
+              <Route path="users" element={<ManagerUsersPage />} />
               <Route path="settings" element={<ManagerSettingsPage />} />
             </Route>
             <Route path="/manager/*" element={<LegacyRestaurantRedirect />} />

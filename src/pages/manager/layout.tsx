@@ -21,6 +21,7 @@ import {
   QrCode,
   Settings,
   UtensilsCrossed,
+  Users,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -53,6 +54,12 @@ const navItems = [
     to: "/restaurant/reports",
     label: "Reports",
     icon: BarChart3,
+    managerOnly: true,
+  },
+  {
+    to: "/restaurant/users",
+    label: "Users",
+    icon: Users,
     managerOnly: true,
   },
   { to: "/restaurant/settings", label: "Settings", icon: Settings },
@@ -287,6 +294,7 @@ function ManagerGuard({ children }: { children: React.ReactNode }) {
     "/restaurant/tables",
     "/restaurant/menu",
     "/restaurant/reports",
+    "/restaurant/users",
   ].includes(location.pathname);
 
   if (user === undefined) {
@@ -401,7 +409,7 @@ export default function ManagerLayout() {
       <Authenticated>
         <ManagerGuard>
           <div className="flex h-screen overflow-hidden bg-background">
-            <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+            <aside className="hidden w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex">
               <div className="flex items-center gap-2.5 border-b border-sidebar-border px-4 py-4">
                 {restaurant?.logoUrl ? (
                   <img
@@ -529,14 +537,14 @@ export default function ManagerLayout() {
               </header>
               <Outlet />
             </main>
-            <nav className="fixed inset-x-0 bottom-0 z-50 flex justify-around border-t border-sidebar-border bg-sidebar px-1 py-2 md:hidden">
-              {visibleNav.slice(0, 5).map(({ to, label, icon: Icon }) => (
+            <nav className="fixed inset-x-0 bottom-0 z-50 flex justify-around overflow-x-auto border-t border-sidebar-border bg-sidebar px-1 py-2 md:hidden">
+              {visibleNav.map(({ to, label, icon: Icon }) => (
                 <NavLink
                   key={to}
                   to={to}
                   className={({ isActive }) =>
                     cn(
-                      "relative flex flex-col items-center gap-0.5 px-2 py-1 text-[10px]",
+                      "relative flex min-w-14 shrink-0 flex-col items-center gap-0.5 px-2 py-1 text-[10px]",
                       isActive
                         ? "text-sidebar-primary"
                         : "text-muted-foreground",

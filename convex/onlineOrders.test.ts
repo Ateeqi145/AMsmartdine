@@ -412,6 +412,7 @@ describe("online delivery ordering", () => {
         deliveryPinCiphertext: "encrypted-pin",
         deliveryPinExpiresAt: Date.now() + 60_000,
       });
+
     });
 
     await expect(
@@ -483,6 +484,168 @@ describe("online delivery ordering", () => {
         trackingToken: checkout.trackingToken,
       }),
     ).rejects.toThrow(/pending online payment/i);
+  });
+
+  it("lets managers hide delivered home delivery orders without deleting report data", async () => {
+    const t = convexTest(schema, modules);
+    const { restaurantId, menuItemId } = await seedOnlineRestaurant(t);
+    const managerId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        role: "RESTAURANT_MANAGER",
+        restaurantId,
+        isActive: true,
+      }),
+    );
+    const checkout = await t.mutation(api.orders.createDeliveryOrder, {
+      restaurantId,
+      deliveryAddress: {
+        name: "Guest Customer",
+        phone: "+919876543210",
+        street: "1 Main Street",
+        area: "Central",
+        city: "Delhi",
+        pincode: "110001",
+      },
+      paymentMethod: "COD",
+      items: [{ menuItemId, quantity: 1 }],
+    });
+    await t.run(async (ctx) => {
+      await ctx.db.patch("orders", checkout.orderId, {
+        status: "DELIVERED",
+        deliveredAt: new Date().toISOString(),
+      });
+    });
+
+    const manager = t.withIdentity({ subject: managerId });
+    await expect(
+      manager.mutation(api.orders.clearCompletedDeliveryHistory, {
+        restaurantId,
+        orderIds: [checkout.orderId],
+      }),
+    ).resolves.toBe(1);
+    await expect(
+      manager.query(api.orders.listActiveForRestaurant, { restaurantId }),
+    ).resolves.toEqual([]);
+    await expect(
+      t.run((ctx) => ctx.db.get("orders", checkout.orderId)),
+    ).resolves.toMatchObject({
+      status: "DELIVERED",
+      hiddenFromOrdersAt: expect.any(String),
+    });
+    await expect(
+      manager.query(api.reports.topMenuItems, {
+        restaurantId,
+        limit: 8,
+        orderType: "DELIVERY",
+      }),
+    ).resolves.toEqual([
+      { name: "Test Dish", count: 1, revenue: 1200 },
+    ]);
+  });
+
+  it("separates dine-in and delivery report metrics", async () => {
+    const t = convexTest(schema, modules);
+    const { restaurantId, menuItemId } = await seedOnlineRestaurant(t);
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+    const managerId = await t.run(async (ctx) => {
+      const managerId = await ctx.db.insert("users", {
+        role: "RESTAURANT_MANAGER",
+        restaurantId,
+        isActive: true,
+      });
+      const tableId = await ctx.db.insert("tables", {
+        restaurantId,
+        tableNumber: "T1",
+        isActive: true,
+        qrCodeToken: "report-test-table",
+        createdAt: now,
+      });
+      const sessionId = await ctx.db.insert("sessions", {
+        restaurantId,
+        tableId,
+        status: "CLOSED",
+        customerCount: 1,
+        openedAt: now,
+        closedAt: now,
+      });
+      await ctx.db.insert("orders", {
+        restaurantId,
+        sessionId,
+        tableId,
+        orderType: "DINE_IN",
+        status: "READY",
+        items: [{ menuItemId, name: "Dine-in dish", price: 1000, quantity: 2 }],
+        subtotal: 2000,
+        total: 2000,
+        placedAt: `${today}T10:00:00.000Z`,
+      });
+      const deliveryOrderId = await ctx.db.insert("orders", {
+        restaurantId,
+        orderType: "DELIVERY",
+        status: "DELIVERED",
+        items: [
+          { menuItemId, name: "Delivery dish", price: 1500, quantity: 1 },
+        ],
+        subtotal: 1500,
+        total: 1500,
+        placedAt: `${today}T11:00:00.000Z`,
+        deliveredAt: `${today}T11:30:00.000Z`,
+      });
+      await ctx.db.insert("payments", {
+        restaurantId,
+        sessionId,
+        amount: 2000,
+        method: "CASH",
+        status: "PAID",
+        initiatedAt: now,
+        completedAt: now,
+      });
+      await ctx.db.insert("payments", {
+        restaurantId,
+        orderId: deliveryOrderId,
+        amount: 1500,
+        method: "UPI",
+        status: "PAID",
+        initiatedAt: now,
+        completedAt: now,
+      });
+      return managerId;
+    });
+    const manager = t.withIdentity({ subject: managerId });
+
+    await expect(
+      manager.query(api.reports.topMenuItems, {
+        restaurantId,
+        limit: 8,
+        orderType: "DINE_IN",
+      }),
+    ).resolves.toEqual([
+      { name: "Dine-in dish", count: 2, revenue: 2000 },
+    ]);
+    await expect(
+      manager.query(api.reports.topMenuItems, {
+        restaurantId,
+        limit: 8,
+        orderType: "DELIVERY",
+      }),
+    ).resolves.toEqual([
+      { name: "Delivery dish", count: 1, revenue: 1500 },
+    ]);
+    const dineInRevenue = await manager.query(api.reports.dailyRevenue, {
+      restaurantId,
+      days: 7,
+      orderType: "DINE_IN",
+    });
+    const deliveryRevenue = await manager.query(api.reports.dailyRevenue, {
+      restaurantId,
+      days: 7,
+      orderType: "DELIVERY",
+    });
+    expect(dineInRevenue.find((day) => day.date === today)?.revenue).toBe(2000);
+    expect(deliveryRevenue.find((day) => day.date === today)?.revenue).toBe(
+      1500,
+    );
   });
 
   it("reveals the PIN only through the tracking token and permits assigned-person verification once", async () => {

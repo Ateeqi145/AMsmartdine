@@ -1,7 +1,8 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireSuperAdmin } from "./lib/auth";
 import { assertRoleSlotAvailable } from "./lib/roleLimits";
+import { deleteUserAccount } from "./lib/deleteUser";
 
 export const platformStats = query({
   args: {},
@@ -153,6 +154,47 @@ export const setUserActive = mutation({
       }
     }
     await ctx.db.patch("users", args.userId, { isActive: args.isActive });
+  },
+});
+
+export const deleteUser = mutation({
+  args: { userId: v.id("users") },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const actor = await requireSuperAdmin(ctx);
+    const target = await ctx.db.get("users", args.userId);
+    if (!target) {
+      throw new ConvexError({
+        message: "User not found",
+        code: "NOT_FOUND",
+      });
+    }
+
+    if (actor._id === target._id) {
+      throw new ConvexError({
+        message: "You cannot delete the Super Admin account you are using",
+        code: "FORBIDDEN",
+      });
+    }
+
+    if (target.role === "SUPER_ADMIN" && target.isActive !== false) {
+      const activeAdmins = await ctx.db
+        .query("users")
+        .withIndex("by_role", (q) => q.eq("role", "SUPER_ADMIN"))
+        .take(1000);
+      if (
+        !activeAdmins.some(
+          (user) => user._id !== target._id && user.isActive !== false,
+        )
+      ) {
+        throw new ConvexError({
+          message: "Assign another Super Admin before deleting this account",
+          code: "LAST_SUPER_ADMIN",
+        });
+      }
+    }
+
+    return await deleteUserAccount(ctx, target._id);
   },
 });
 

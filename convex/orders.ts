@@ -581,6 +581,47 @@ export const assignDeliveryPerson = mutation({
   },
 });
 
+/** Manager: hide completed delivery orders from the active Orders screen. */
+export const clearCompletedDeliveryHistory = mutation({
+  args: {
+    restaurantId: v.id("restaurants"),
+    orderIds: v.array(v.id("orders")),
+  },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    await requireRestaurantManager(ctx, args.restaurantId);
+    if (args.orderIds.length > 100) {
+      throw new ConvexError({
+        message: "Clear at most 100 completed deliveries at a time.",
+        code: "BAD_REQUEST",
+      });
+    }
+
+    let archivedCount = 0;
+    for (const orderId of new Set(args.orderIds)) {
+      const order = await ctx.db.get("orders", orderId);
+      if (
+        !order ||
+        order.restaurantId !== args.restaurantId ||
+        order.orderType !== "DELIVERY" ||
+        order.status !== "DELIVERED"
+      ) {
+        throw new ConvexError({
+          message: "Only completed home delivery orders can be cleared.",
+          code: "BAD_REQUEST",
+        });
+      }
+      if (!order.hiddenFromOrdersAt) {
+        await ctx.db.patch("orders", orderId, {
+          hiddenFromOrdersAt: new Date().toISOString(),
+        });
+        archivedCount += 1;
+      }
+    }
+    return archivedCount;
+  },
+});
+
 export const listAssignedDeliveries = query({
   args: {},
   returns: v.array(
@@ -1033,20 +1074,31 @@ export const listActiveForRestaurant = query({
       });
     }
 
-    const orders = await ctx.db
-      .query("orders")
-      .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId),
-      )
-      .order("desc")
-      .take(100);
-
-    const visibleOrders = orders.filter(
-      (order) =>
-        order.orderType !== "DELIVERY" ||
-        order.deliveryPaymentMethod === "COD" ||
-        order.paymentStatus === "PAID",
-    );
+    const visibleOrders: Doc<"orders">[] = [];
+    let cursor: string | null = null;
+    let isDone = false;
+    while (!isDone && visibleOrders.length < 100) {
+      const page = await ctx.db
+        .query("orders")
+        .withIndex("by_restaurant", (q) =>
+          q.eq("restaurantId", args.restaurantId),
+        )
+        .order("desc")
+        .paginate({ numItems: 100, cursor });
+      for (const order of page.page) {
+        if (
+          !order.hiddenFromOrdersAt &&
+          (order.orderType !== "DELIVERY" ||
+            order.deliveryPaymentMethod === "COD" ||
+            order.paymentStatus === "PAID")
+        ) {
+          visibleOrders.push(order);
+        }
+        if (visibleOrders.length === 100) break;
+      }
+      cursor = page.continueCursor;
+      isDone = page.isDone;
+    }
 
     return await Promise.all(
       visibleOrders.map(async (order) => {
@@ -1068,6 +1120,80 @@ export const listActiveForRestaurant = query({
               ? `Delivery · ${order._id.slice(-5).toUpperCase()}`
               : (table?.displayName ?? table?.tableNumber ?? "Table"),
           sessionStatus: session?.status ?? "CLOSED",
+        };
+      }),
+    );
+  },
+});
+
+/** Manager and staff: list the most recent completed and cancelled orders. */
+export const listHistoryForRestaurant = query({
+  args: { restaurantId: v.id("restaurants") },
+  returns: v.array(
+    schema
+      .doc("orders")
+      .omit(
+        "deliveryTrackingTokenHash",
+        "deliveryPinHash",
+        "deliveryPinCiphertext",
+        "deliveryPinExpiresAt",
+        "deliveryPinFailedAttempts",
+        "deliveryPinLockedUntil",
+      )
+      .extend({ tableDisplayName: v.string() }),
+  ),
+  handler: async (ctx, args) => {
+    const user = await requireRestaurantAccess(ctx, args.restaurantId);
+    if (user.role === "DELIVERY_PERSON") {
+      throw new ConvexError({
+        message: "Order history is not available to delivery personnel.",
+        code: "FORBIDDEN",
+      });
+    }
+
+    const [deliveredOrders, cancelledOrders] = await Promise.all([
+      ctx.db
+        .query("orders")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "DELIVERED"),
+        )
+        .order("desc")
+        .take(100),
+      ctx.db
+        .query("orders")
+        .withIndex("by_restaurant_status", (q) =>
+          q.eq("restaurantId", args.restaurantId).eq("status", "CANCELLED"),
+        )
+        .order("desc")
+        .take(100),
+    ]);
+
+    const history = [...deliveredOrders, ...cancelledOrders]
+      .sort(
+        (left, right) =>
+          right.placedAt.localeCompare(left.placedAt) ||
+          right._creationTime - left._creationTime,
+      )
+      .slice(0, 100);
+
+    return await Promise.all(
+      history.map(async (order) => {
+        const table = order.tableId
+          ? await ctx.db.get("tables", order.tableId)
+          : null;
+        const safeOrder = { ...order };
+        delete safeOrder.deliveryTrackingTokenHash;
+        delete safeOrder.deliveryPinHash;
+        delete safeOrder.deliveryPinCiphertext;
+        delete safeOrder.deliveryPinExpiresAt;
+        delete safeOrder.deliveryPinFailedAttempts;
+        delete safeOrder.deliveryPinLockedUntil;
+        return {
+          ...safeOrder,
+          tableDisplayName:
+            order.orderType === "DELIVERY"
+              ? `Delivery · ${order._id.slice(-5).toUpperCase()}`
+              : (table?.displayName ?? table?.tableNumber ?? "Table"),
         };
       }),
     );

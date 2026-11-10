@@ -17,6 +17,7 @@ import type * as featureFlags from "../featureFlags.js";
 import type * as feedback from "../feedback.js";
 import type * as http from "../http.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as lib_deleteUser from "../lib/deleteUser.js";
 import type * as lib_deliveryPin from "../lib/deliveryPin.js";
 import type * as lib_roleLimits from "../lib/roleLimits.js";
 import type * as lib_sessionLifecycle from "../lib/sessionLifecycle.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   feedback: typeof feedback;
   http: typeof http;
   "lib/auth": typeof lib_auth;
+  "lib/deleteUser": typeof lib_deleteUser;
   "lib/deliveryPin": typeof lib_deliveryPin;
   "lib/roleLimits": typeof lib_roleLimits;
   "lib/sessionLifecycle": typeof lib_sessionLifecycle;

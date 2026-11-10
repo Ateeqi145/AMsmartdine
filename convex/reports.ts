@@ -2,8 +2,20 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireRestaurantManager } from "./lib/auth";
 
+const reportOrderType = v.union(
+  v.literal("DINE_IN"),
+  v.literal("DELIVERY"),
+);
+
 export const dailyRevenue = query({
-  args: { restaurantId: v.id("restaurants"), days: v.number() },
+  args: {
+    restaurantId: v.id("restaurants"),
+    days: v.number(),
+    orderType: reportOrderType,
+  },
+  returns: v.array(
+    v.object({ date: v.string(), revenue: v.number() }),
+  ),
   handler: async (
     ctx,
     args,
@@ -14,18 +26,35 @@ export const dailyRevenue = query({
     since.setDate(since.getDate() - args.days);
     since.setHours(0, 0, 0, 0);
 
-    const payments = await ctx.db
-      .query("payments")
-      .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId),
-      )
-      .collect();
+    const [orders, payments] = await Promise.all([
+      ctx.db
+        .query("orders")
+        .withIndex("by_restaurant", (q) =>
+          q.eq("restaurantId", args.restaurantId),
+        )
+        .collect(),
+      ctx.db
+        .query("payments")
+        .withIndex("by_restaurant", (q) =>
+          q.eq("restaurantId", args.restaurantId),
+        )
+        .collect(),
+    ]);
+    const orderTypes = new Map(
+      orders.map((order) => [
+        order._id,
+        order.orderType ?? (order.sessionId ? "DINE_IN" : undefined),
+      ]),
+    );
 
     const paid = payments.filter(
       (p) =>
         p.status === "PAID" &&
         p.completedAt &&
-        new Date(p.completedAt) >= since,
+        new Date(p.completedAt) >= since &&
+        (p.orderId
+          ? orderTypes.get(p.orderId) === args.orderType
+          : args.orderType === "DINE_IN" && Boolean(p.sessionId)),
     );
 
     const byDay: Record<string, number> = {};
@@ -47,7 +76,18 @@ export const dailyRevenue = query({
 });
 
 export const topMenuItems = query({
-  args: { restaurantId: v.id("restaurants"), limit: v.number() },
+  args: {
+    restaurantId: v.id("restaurants"),
+    limit: v.number(),
+    orderType: reportOrderType,
+  },
+  returns: v.array(
+    v.object({
+      name: v.string(),
+      count: v.number(),
+      revenue: v.number(),
+    }),
+  ),
   handler: async (
     ctx,
     args,
@@ -63,7 +103,13 @@ export const topMenuItems = query({
 
     const itemMap: Record<string, { count: number; revenue: number }> = {};
     for (const order of orders) {
-      if (order.status === "CANCELLED") continue;
+      if (
+        order.status === "CANCELLED" ||
+        (order.orderType ?? (order.sessionId ? "DINE_IN" : undefined)) !==
+          args.orderType
+      ) {
+        continue;
+      }
       for (const item of order.items) {
         const existing = itemMap[item.name] ?? { count: 0, revenue: 0 };
         itemMap[item.name] = {
@@ -81,7 +127,16 @@ export const topMenuItems = query({
 });
 
 export const sessionStats = query({
-  args: { restaurantId: v.id("restaurants") },
+  args: {
+    restaurantId: v.id("restaurants"),
+    orderType: reportOrderType,
+  },
+  returns: v.object({
+    avgDurationMinutes: v.number(),
+    avgOrderValue: v.number(),
+    totalOrdersToday: v.number(),
+    totalRevenueToday: v.number(),
+  }),
   handler: async (
     ctx,
     args,
@@ -95,37 +150,64 @@ export const sessionStats = query({
 
     const todayStr = new Date().toISOString().slice(0, 10);
 
-    const allSessions = await ctx.db
-      .query("sessions")
-      .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId),
-      )
-      .collect();
-
-    const closedSessions = allSessions.filter(
-      (s) => s.status === "CLOSED" && s.closedAt,
-    );
+    const [allSessions, todayOrders] = await Promise.all([
+      args.orderType === "DINE_IN"
+        ? ctx.db
+            .query("sessions")
+            .withIndex("by_restaurant", (q) =>
+              q.eq("restaurantId", args.restaurantId),
+            )
+            .collect()
+        : Promise.resolve([]),
+      ctx.db
+        .query("orders")
+        .withIndex("by_restaurant", (q) =>
+          q.eq("restaurantId", args.restaurantId),
+        )
+        .collect(),
+    ]);
 
     const avgDuration =
-      closedSessions.length > 0
-        ? closedSessions.reduce((sum, s) => {
-            const mins =
-              (new Date(s.closedAt!).getTime() -
-                new Date(s.openedAt).getTime()) /
-              60000;
-            return sum + mins;
-          }, 0) / closedSessions.length
-        : 0;
-
-    const todayOrders = await ctx.db
-      .query("orders")
-      .withIndex("by_restaurant", (q) =>
-        q.eq("restaurantId", args.restaurantId),
-      )
-      .collect();
+      args.orderType === "DINE_IN"
+        ? (() => {
+            const closedSessions = allSessions.filter(
+              (session) => session.status === "CLOSED" && session.closedAt,
+            );
+            return closedSessions.length > 0
+              ? closedSessions.reduce((sum, session) => {
+                  const minutes =
+                    (new Date(session.closedAt!).getTime() -
+                      new Date(session.openedAt).getTime()) /
+                    60000;
+                  return sum + minutes;
+                }, 0) / closedSessions.length
+              : 0;
+          })()
+        : (() => {
+            const deliveredOrders = todayOrders.filter(
+              (order) =>
+                order.orderType === "DELIVERY" &&
+                order.status === "DELIVERED" &&
+                order.deliveredAt,
+            );
+            return deliveredOrders.length > 0
+              ? deliveredOrders.reduce(
+                  (sum, order) =>
+                    sum +
+                    (new Date(order.deliveredAt!).getTime() -
+                      new Date(order.placedAt).getTime()) /
+                      60000,
+                  0,
+                ) / deliveredOrders.length
+              : 0;
+          })();
 
     const todayFiltered = todayOrders.filter(
-      (o) => o.placedAt.slice(0, 10) === todayStr && o.status !== "CANCELLED",
+      (order) =>
+        order.placedAt.slice(0, 10) === todayStr &&
+        order.status !== "CANCELLED" &&
+        (order.orderType ??
+          (order.sessionId ? "DINE_IN" : undefined)) === args.orderType,
     );
 
     const totalToday = todayFiltered.length;
